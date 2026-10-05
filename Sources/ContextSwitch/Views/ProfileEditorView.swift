@@ -4,7 +4,6 @@ import AppKit
 struct ProfileEditorView: View {
     @ObservedObject var appState: AppState
     @State private var selectedProfileID: Profile.ID?
-    @State private var draft: Profile?
 
     private var sortedProfiles: [Profile] {
         appState.profiles.sorted(by: { $0.priority > $1.priority })
@@ -29,34 +28,28 @@ struct ProfileEditorView: View {
             // it is never useful.
             .toolbar(removing: .sidebarToggle)
         } detail: {
-            if let draft {
+            if let profile = selectedProfile {
+                // Edits save as you make them, like System Settings.
                 ProfileDetailEditor(
                     appState: appState,
-                    draft: Binding(
-                        get: { draft },
-                        set: { self.draft = $0 }
-                    ),
-                    onSave: { appState.saveProfile($0) },
-                    onDelete: deleteProfile
+                    profile: Binding(
+                        get: { appState.profiles.first { $0.id == profile.id } ?? profile },
+                        set: { appState.saveProfile($0) }
+                    )
                 )
+                .id(profile.id)
             } else {
                 Text("Select or create a profile")
                     .foregroundStyle(.secondary)
             }
         }
-        .onChange(of: selectedProfileID) { _, newID in
-            draft = appState.profiles.first { $0.id == newID }
-        }
         .onAppear {
             if selectedProfileID == nil {
-                selectedProfileID = appState.profiles.first?.id
+                selectedProfileID = sortedProfiles.first?.id
             }
         }
-        .onDisappear {
-            // Back to menu-bar-only once the editor window closes.
-            NSApp.setActivationPolicy(.accessory)
-        }
-        .frame(minWidth: 640, minHeight: 440)
+        .keepsAppActiveWhileOpen()
+        .frame(minWidth: 680, minHeight: 460)
     }
 
     private var sidebarActions: some View {
@@ -129,19 +122,21 @@ private struct SidebarActionButton: View {
 
 private struct ProfileDetailEditor: View {
     @ObservedObject var appState: AppState
-    @Binding var draft: Profile
-    var onSave: (Profile) -> Void
-    var onDelete: (Profile) -> Void
+    @Binding var profile: Profile
 
     @State private var showingAppPicker = false
     @State private var showingConditionPicker = false
 
+    private var needsLocationAccess: Bool {
+        profile.conditions.contains(where: \.requiresLocationPermission) && !appState.isLocationAuthorized
+    }
+
     var body: some View {
         Form {
             Section("Profile") {
-                TextField("Name", text: $draft.name)
-                Stepper("Priority: \(draft.priority)", value: $draft.priority)
-                Text(draft.conditions.isEmpty
+                TextField("Name", text: $profile.name)
+                Stepper("Priority: \(profile.priority)", value: $profile.priority)
+                Text(profile.conditions.isEmpty
                      ? "No conditions — this is the fallback profile, used when nothing else matches."
                      : "Matches when ALL conditions below are true.")
                     .font(.caption)
@@ -149,18 +144,19 @@ private struct ProfileDetailEditor: View {
             }
 
             Section("Conditions") {
-                ForEach(draft.conditions) { condition in
+                ForEach(profile.conditions) { condition in
                     HStack {
-                        Text(condition.kindLabel).foregroundStyle(.secondary)
+                        Label(condition.kindLabel, systemImage: condition.systemImage)
+                            .foregroundStyle(.secondary)
                         Text(condition.valueLabel)
+                            .lineLimit(1)
+                            .truncationMode(.middle)
                         Spacer()
-                        Button(role: .destructive) {
-                            draft.conditions.removeAll { $0.id == condition.id }
-                        } label: {
-                            Image(systemName: "minus.circle")
-                        }
-                        .buttonStyle(.borderless)
+                        RemoveButton { profile.conditions.removeAll { $0.id == condition.id } }
                     }
+                }
+                if needsLocationAccess {
+                    LocationAccessBanner(appState: appState, message: "Wi-Fi and Place conditions can't match until ContextSwitch has Location access.")
                 }
                 Button {
                     showingConditionPicker = true
@@ -170,23 +166,30 @@ private struct ProfileDetailEditor: View {
             }
 
             Section("Apps") {
-                ForEach(draft.appRules.indices, id: \.self) { idx in
+                ForEach($profile.appRules) { $rule in
                     HStack {
-                        Text(draft.appRules[idx].displayName)
+                        Image(nsImage: appState.icon(for: rule))
+                            .resizable()
+                            .frame(width: 20, height: 20)
+                        VStack(alignment: .leading, spacing: 1) {
+                            Text(rule.displayName)
+                            if rule.isExecutable, let path = rule.path {
+                                Text(path)
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                                    .lineLimit(1)
+                                    .truncationMode(.middle)
+                            }
+                        }
                         Spacer()
-                        Picker("", selection: $draft.appRules[idx].action) {
+                        Picker("", selection: $rule.action) {
                             Text("Launch").tag(AppAction.launch)
                             Text("Quit").tag(AppAction.quit)
                             Text("Ignore").tag(AppAction.ignore)
                         }
                         .labelsHidden()
                         .frame(width: 110)
-                        Button(role: .destructive) {
-                            draft.appRules.remove(at: idx)
-                        } label: {
-                            Image(systemName: "minus.circle")
-                        }
-                        .buttonStyle(.borderless)
+                        RemoveButton { profile.appRules.removeAll { $0.id == rule.id } }
                     }
                 }
                 Button {
@@ -195,26 +198,31 @@ private struct ProfileDetailEditor: View {
                     Label("Add App…", systemImage: "plus")
                 }
             }
-
-            Section {
-                HStack {
-                    Button("Save", action: { onSave(draft) })
-                        .buttonStyle(.borderedProminent)
-                    Spacer()
-                    Button("Delete Profile", role: .destructive) { onDelete(draft) }
-                }
-            }
         }
         .formStyle(.grouped)
         .sheet(isPresented: $showingAppPicker) {
-            AppPickerView { bundleID, name in
-                draft.appRules.append(AppRule(bundleIdentifier: bundleID, displayName: name, action: .launch))
+            AppPickerView(existingKeys: Set(profile.appRules.map(\.targetKey))) { rule in
+                profile.appRules.append(rule)
             }
         }
         .sheet(isPresented: $showingConditionPicker) {
-            ConditionPickerView(currentSnapshot: appState.snapshot) { condition in
-                draft.conditions.append(condition)
+            ConditionPickerView(appState: appState) { condition in
+                if !profile.conditions.contains(condition) {
+                    profile.conditions.append(condition)
+                }
             }
         }
+    }
+}
+
+private struct RemoveButton: View {
+    let action: () -> Void
+
+    var body: some View {
+        Button(role: .destructive, action: action) {
+            Image(systemName: "minus.circle")
+        }
+        .buttonStyle(.borderless)
+        .help("Remove")
     }
 }

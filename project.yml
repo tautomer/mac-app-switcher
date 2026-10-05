@@ -24,7 +24,8 @@ targets:
       properties:
         LSUIElement: true
         LSApplicationCategoryType: public.app-category.utilities
-        NSLocationWhenInUseUsageDescription: "ContextSwitch uses your location to detect when you've arrived at a saved place (like Home or Office) and to read your current Wi-Fi network name, so it can switch app profiles automatically."
+        NSLocationUsageDescription: "ContextSwitch uses your location to read the name of the Wi-Fi network you're on and to detect saved places (like Home or Office), so it can switch app profiles automatically."
+        NSLocationWhenInUseUsageDescription: "ContextSwitch uses your location to read the name of the Wi-Fi network you're on and to detect saved places (like Home or Office), so it can switch app profiles automatically."
         NSLocationAlwaysAndWhenInUseUsageDescription: "ContextSwitch uses your location to detect arrival/departure from saved places even when the app isn't in the foreground, so profile switching keeps working in the background."
         NSHumanReadableCopyright: "Copyright © 2026. All rights reserved."
     settings:
@@ -35,3 +36,23 @@ targets:
         CURRENT_PROJECT_VERSION: "1"
         CODE_SIGN_STYLE: Automatic
         ASSETCATALOG_COMPILER_APPICON_NAME: ""
+    scheme:
+      testTargets:
+        - ContextSwitchTests
+
+  # Logic tests. Compiles the model sources directly instead of hosting the
+  # app, so running tests never launches ContextSwitch (which would apply
+  # your real profiles and launch/quit apps).
+  ContextSwitchTests:
+    type: bundle.unit-test
+    platform: macOS
+    deploymentTarget: "14.0"
+    sources:
+      - path: Tests/ContextSwitchTests
+      - path: Sources/ContextSwitch/Models
+      - path: Sources/ContextSwitch/Services/ProfileMatcher.swift
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.contextswitch.tests
+        GENERATE_INFOPLIST_FILE: YES
+        CODE_SIGN_STYLE: Automatic

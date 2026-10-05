@@ -26,7 +26,9 @@
 	<string>Copyright © 2026. All rights reserved.</string>
 	<key>NSLocationAlwaysAndWhenInUseUsageDescription</key>
 	<string>ContextSwitch uses your location to detect arrival/departure from saved places even when the app isn't in the foreground, so profile switching keeps working in the background.</string>
+	<key>NSLocationUsageDescription</key>
+	<string>ContextSwitch uses your location to read the name of the Wi-Fi network you're on and to detect saved places (like Home or Office), so it can switch app profiles automatically.</string>
 	<key>NSLocationWhenInUseUsageDescription</key>
-	<string>ContextSwitch uses your location to detect when you've arrived at a saved place (like Home or Office) and to read your current Wi-Fi network name, so it can switch app profiles automatically.</string>
+	<string>ContextSwitch uses your location to read the name of the Wi-Fi network you're on and to detect saved places (like Home or Office), so it can switch app profiles automatically.</string>
 </dict>
 </plist>

@@ -8,7 +8,11 @@ enum AppAction: String, Codable, CaseIterable {
 
 struct AppRule: Codable, Hashable, Identifiable {
     var id: UUID = UUID()
-    var bundleIdentifier: String
+    /// nil for plain executables (scripts, command-line tools).
+    var bundleIdentifier: String?
+    /// Where the app or executable lives. For apps it's a fallback for when
+    /// Launch Services can't resolve the bundle identifier.
+    var path: String?
     var displayName: String
     var action: AppAction
 
@@ -18,5 +22,16 @@ struct AppRule: Codable, Hashable, Identifiable {
 
     var effectiveAction: AppAction {
         manualOverride ?? action
+    }
+
+    /// Scripts and command-line tools are run directly rather than through
+    /// Launch Services.
+    var isExecutable: Bool {
+        bundleIdentifier == nil && !(path?.hasSuffix(".app") ?? false)
+    }
+
+    /// Identifies the same app/executable across rules, for de-duplication.
+    var targetKey: String {
+        bundleIdentifier ?? path ?? displayName
     }
 }

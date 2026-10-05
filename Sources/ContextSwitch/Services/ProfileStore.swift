@@ -2,17 +2,22 @@ import Foundation
 import Combine
 
 /// Persists profiles as JSON under
-/// ~/Library/Application Support/ContextSwitch/profiles.json
+/// ~/Library/Application Support/ContextSwitch/profiles.json, or at
+/// $CONTEXTSWITCH_PROFILES if set (handy for trying things out without
+/// touching your real profiles).
 final class ProfileStore: ObservableObject {
     @Published var profiles: [Profile] = []
 
     private let fileURL: URL
 
     init() {
-        let appSupport = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
-        let dir = appSupport.appendingPathComponent("ContextSwitch", isDirectory: true)
-        try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
-        fileURL = dir.appendingPathComponent("profiles.json")
+        if let override = ProcessInfo.processInfo.environment["CONTEXTSWITCH_PROFILES"], !override.isEmpty {
+            fileURL = URL(fileURLWithPath: override)
+        } else {
+            let appSupport = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
+            fileURL = appSupport.appendingPathComponent("ContextSwitch/profiles.json")
+        }
+        try? FileManager.default.createDirectory(at: fileURL.deletingLastPathComponent(), withIntermediateDirectories: true)
         load()
     }
 

@@ -6,12 +6,11 @@ import Combine
 
 /// Watches for network changes (interface up/down, Wi-Fi join/leave, IP
 /// changes) and publishes a fresh `NetworkSnapshot` whenever something
-/// moves. Uses SystemConfiguration for IP/gateway info (no permission
-/// required) and CoreWLAN for SSID (requires Location permission, handled
-/// gracefully if absent). Marked @unchecked Sendable because its callbacks
-/// arrive on background queues (NWPathMonitor, SCDynamicStore) but every
-/// mutation of `snapshot` is funneled through DispatchQueue.main.async,
-/// so access is effectively serialized on the main queue.
+/// moves. Uses SystemConfiguration for addresses/routers/DNS (no permission
+/// required) and CoreWLAN for SSID (requires Location permission, nil
+/// otherwise). Marked @unchecked Sendable because callbacks arrive on
+/// background queues, but snapshots are built on `monitorQueue` and every
+/// mutation of `snapshot` happens on the main queue.
 final class NetworkMonitor: ObservableObject, @unchecked Sendable {
     @Published private(set) var snapshot: NetworkSnapshot = .empty
 
@@ -43,6 +42,7 @@ final class NetworkMonitor: ObservableObject, @unchecked Sendable {
             "State:/Network/Global/DNS",
         ] as CFArray
         let patterns = [
+            "State:/Network/Service/.*/IPv4",
             "State:/Network/Interface/.*/AirPort",
             "State:/Network/Interface/.*/IPv4",
             "State:/Network/Interface/.*/Link",
@@ -56,12 +56,18 @@ final class NetworkMonitor: ObservableObject, @unchecked Sendable {
         refresh()
     }
 
+    /// Rebuilds the snapshot off the main thread (SystemConfiguration and
+    /// CoreWLAN reads can block), then publishes it on main.
     func refresh() {
-        let snap = NetworkMonitor.buildSnapshot(existingLocation: snapshot.location)
-        DispatchQueue.main.async { [weak self] in
-            guard let self else { return }
-            if snap != self.snapshot {
-                self.snapshot = snap
+        monitorQueue.async { [weak self] in
+            let snap = NetworkMonitor.buildSnapshot()
+            DispatchQueue.main.async {
+                guard let self else { return }
+                var next = snap
+                next.location = self.snapshot.location
+                if next != self.snapshot {
+                    self.snapshot = next
+                }
             }
         }
     }
@@ -79,65 +85,43 @@ final class NetworkMonitor: ObservableObject, @unchecked Sendable {
         }
     }
 
-    private static func buildSnapshot(existingLocation: SimpleLocation?) -> NetworkSnapshot {
+    private static func buildSnapshot() -> NetworkSnapshot {
         var snap = NetworkSnapshot()
-        snap.location = existingLocation
-
         guard let store = SCDynamicStoreCreate(nil, "ContextSwitch.read" as CFString, nil, nil) else {
             return snap
         }
 
-        guard let globalIPv4 = SCDynamicStoreCopyValue(store, "State:/Network/Global/IPv4" as CFString) as? [String: Any],
-              let primaryInterface = globalIPv4["PrimaryInterface"] as? String else {
-            return snap
-        }
-        snap.interfaceName = primaryInterface
-        snap.gatewayIPv4 = globalIPv4["Router"] as? String
-
-        if let ifaceIPv4 = SCDynamicStoreCopyValue(store, "State:/Network/Interface/\(primaryInterface)/IPv4" as CFString) as? [String: Any],
-           let addresses = ifaceIPv4["Addresses"] as? [String], let first = addresses.first {
-            snap.localIPv4 = first
+        if let dns = SCDynamicStoreCopyValue(store, "State:/Network/Global/DNS" as CFString) as? [String: Any] {
+            let domains = [dns["DomainName"] as? String].compactMap { $0 } + (dns["SearchDomains"] as? [String] ?? [])
+            var seen = Set<String>()
+            snap.dnsDomains = domains.filter { seen.insert($0.lowercased()).inserted }
         }
 
-        // Wi-Fi vs wired, and SSID via CoreWLAN (needs Location permission).
-        let wifiInterfaceNames = Set((CWWiFiClient.shared().interfaces() ?? []).compactMap { $0.interfaceName })
-        snap.isWiFi = wifiInterfaceNames.contains(primaryInterface)
-        snap.isWired = !snap.isWiFi
+        let globalIPv4 = SCDynamicStoreCopyValue(store, "State:/Network/Global/IPv4" as CFString) as? [String: Any]
+        let primaryService = globalIPv4?["PrimaryService"] as? String
 
-        if snap.isWiFi, let cwInterface = CWWiFiClient.shared().interface(withName: primaryInterface) {
-            snap.ssid = cwInterface.ssid()
+        let wifiClient = CWWiFiClient.shared()
+        for service in NetworkInventory.services() {
+            guard let ipv4 = SCDynamicStoreCopyValue(store, "State:/Network/Service/\(service.id)/IPv4" as CFString) as? [String: Any],
+                  let address = (ipv4["Addresses"] as? [String])?.first
+            else { continue }
+            var connection = NetworkConnection(
+                serviceName: service.name,
+                interfaceName: service.interfaceName,
+                kind: service.kind,
+                localIPv4: address,
+                routerIPv4: ipv4["Router"] as? String,
+                routerMAC: (ipv4["NetworkSignature"] as? String).flatMap(MACAddress.router(fromNetworkSignature:))
+            )
+            if service.kind == .wifi {
+                connection.ssid = wifiClient.interface(withName: service.interfaceName)?.ssid()
+            }
+            if service.id == primaryService {
+                snap.connections.insert(connection, at: 0)
+            } else {
+                snap.connections.append(connection)
+            }
         }
-
-        if let gateway = snap.gatewayIPv4 {
-            snap.gatewayMAC = NetworkMonitor.lookupMAC(forIP: gateway)
-        }
-
         return snap
-    }
-
-    /// Shells out to `arp -n <ip>` to resolve the router's MAC address.
-    /// Best-effort: the ARP cache may be empty right after a network
-    /// change, in which case this returns nil and we just rely on IP/SSID.
-    private static func lookupMAC(forIP ip: String) -> String? {
-        let process = Process()
-        process.executableURL = URL(fileURLWithPath: "/usr/sbin/arp")
-        process.arguments = ["-n", ip]
-        let pipe = Pipe()
-        process.standardOutput = pipe
-        process.standardError = Pipe()
-        do {
-            try process.run()
-            process.waitUntilExit()
-        } catch {
-            return nil
-        }
-        let data = pipe.fileHandleForReading.readDataToEndOfFile()
-        guard let output = String(data: data, encoding: .utf8) else { return nil }
-        // Typical line: "? (192.168.1.1) at a1:b2:c3:d4:e5:f6 on en0 ifscope [ethernet]"
-        guard let atRange = output.range(of: " at ") else { return nil }
-        let rest = output[atRange.upperBound...]
-        guard let spaceRange = rest.range(of: " ") else { return nil }
-        let mac = String(rest[rest.startIndex..<spaceRange.lowerBound])
-        return mac == "(incomplete)" ? nil : mac
     }
 }

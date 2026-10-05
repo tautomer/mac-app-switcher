@@ -31,16 +31,22 @@ struct MenuBarContentView: View {
         }
         .frame(width: 300)
         .padding(.vertical, 8)
+        // Executables don't post launch/quit notifications; re-check on open.
+        .onAppear { appState.refreshRunState() }
     }
 
     private var header: some View {
-        HStack {
+        HStack(alignment: .top) {
             VStack(alignment: .leading, spacing: 2) {
                 Text(appState.activeProfile?.name ?? "No Profile")
                     .font(.headline)
                 Text(appState.isManualOverride ? "Manually selected" : "Auto-detected")
                     .font(.caption)
                     .foregroundStyle(.secondary)
+                Label(networkSummary, systemImage: networkSymbol)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
             }
             Spacer()
             if appState.isManualOverride {
@@ -54,6 +60,23 @@ struct MenuBarContentView: View {
         .padding(.bottom, 6)
     }
 
+    private var networkSummary: String {
+        guard let primary = appState.snapshot.primary else { return "Offline" }
+        switch primary.kind {
+        case .wifi: return primary.ssid.map { "Wi-Fi · \($0)" } ?? "Wi-Fi"
+        case .ethernet, .other: return primary.serviceName
+        }
+    }
+
+    private var networkSymbol: String {
+        switch appState.snapshot.primary?.kind {
+        case .wifi: return "wifi"
+        case .ethernet: return "cable.connector.horizontal"
+        case .other: return "network"
+        case nil: return "wifi.slash"
+        }
+    }
+
     private func appList(for profile: Profile) -> some View {
         VStack(alignment: .leading, spacing: 0) {
             if profile.appRules.isEmpty {
@@ -63,7 +86,7 @@ struct MenuBarContentView: View {
                     .padding()
             } else {
                 ForEach(profile.appRules) { rule in
-                    AppRow(appState: appState, profile: profile, rule: rule)
+                    AppRow(appState: appState, rule: rule)
                 }
             }
         }
@@ -73,8 +96,14 @@ struct MenuBarContentView: View {
     private var profilePicker: some View {
         Menu {
             ForEach(appState.profiles) { profile in
-                Button(profile.name) {
+                Button {
                     appState.selectManually(profile)
+                } label: {
+                    if profile.id == appState.activeProfile?.id {
+                        Label(profile.name, systemImage: "checkmark")
+                    } else {
+                        Text(profile.name)
+                    }
                 }
             }
         } label: {
@@ -88,14 +117,17 @@ struct MenuBarContentView: View {
     private var footer: some View {
         HStack {
             Button("Edit Profiles…") {
-                // As an LSUIElement app we're never activated by clicks in
-                // the popover, so the window would open behind the frontmost
-                // app. Become a regular app while the editor is open;
-                // ProfileEditorView reverts this when it closes.
-                NSApp.setActivationPolicy(.regular)
-                NSApp.activate()
+                WindowActivation.bringToFront()
                 openWindow(id: "profile-editor")
             }
+            Button {
+                WindowActivation.bringToFront()
+                openWindow(id: "settings")
+            } label: {
+                Label("Settings…", systemImage: "gearshape")
+                    .labelStyle(.iconOnly)
+            }
+            .help("Settings")
             Spacer()
             Button("Quit") {
                 NSApp.terminate(nil)
@@ -108,25 +140,24 @@ struct MenuBarContentView: View {
 
 private struct AppRow: View {
     @ObservedObject var appState: AppState
-    let profile: Profile
     let rule: AppRule
 
-    var isRunning: Bool {
-        appState.runState(for: rule.bundleIdentifier) == .running
-    }
-
     var body: some View {
-        HStack {
+        let isRunning = appState.isRunning(rule)
+        HStack(spacing: 8) {
+            Image(nsImage: appState.icon(for: rule))
+                .resizable()
+                .frame(width: 18, height: 18)
+            Text(rule.displayName)
+                .lineLimit(1)
             Circle()
                 .fill(isRunning ? Color.green : Color.secondary.opacity(0.4))
-                .frame(width: 7, height: 7)
-            Text(rule.displayName)
+                .frame(width: 6, height: 6)
+                .help(isRunning ? "Running" : "Not running")
             Spacer()
             Toggle("", isOn: Binding(
                 get: { rule.effectiveAction == .launch },
-                set: { newValue in
-                    appState.setOverride(newValue ? .launch : .quit, forAppIn: profile, bundleIdentifier: rule.bundleIdentifier)
-                }
+                set: { appState.setOverride($0 ? .launch : .quit, forRule: rule.id) }
             ))
             .toggleStyle(.switch)
             .labelsHidden()
