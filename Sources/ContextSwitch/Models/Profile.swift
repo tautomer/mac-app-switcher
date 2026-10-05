@@ -3,7 +3,7 @@ import Foundation
 struct Profile: Codable, Hashable, Identifiable {
     var id: UUID = UUID()
     var name: String
-    var conditions: [NetworkCondition] = []
+    var conditions: [ConditionClause] = []
     var appRules: [AppRule] = []
 
     /// Higher priority wins when multiple profiles' conditions all match.
@@ -13,18 +13,55 @@ struct Profile: Codable, Hashable, Identifiable {
     /// when nothing else does.
     var isFallback: Bool { conditions.isEmpty }
 
-    func matches(_ snapshot: NetworkSnapshot) -> Bool {
+    /// The clauses split at each "or". The profile matches when every
+    /// clause in any one group holds.
+    var conditionGroups: [[ConditionClause]] {
+        var groups: [[ConditionClause]] = []
+        for clause in conditions {
+            if groups.isEmpty || clause.connector == .or {
+                groups.append([clause])
+            } else {
+                groups[groups.count - 1].append(clause)
+            }
+        }
+        return groups
+    }
+
+    /// nil when the outcome hinges on something we can't read yet (a hidden
+    /// Wi-Fi name, no location fix). Fallback profiles evaluate to false.
+    func evaluate(_ snapshot: NetworkSnapshot) -> Bool? {
         guard !conditions.isEmpty else { return false }
-        return conditions.allSatisfy { $0.isSatisfied(by: snapshot) }
+        return Kleene.any(conditionGroups.map { group in
+            Kleene.all(group.map { $0.evaluate(snapshot) })
+        })
+    }
+
+    func matches(_ snapshot: NetworkSnapshot) -> Bool {
+        evaluate(snapshot) == true
+    }
+
+    /// e.g. `(Wi-Fi Network “Home” and not Ethernet Adapter “Dock”) or DNS Domain “corp.com”`
+    var conditionSummary: String {
+        let groups = conditionGroups
+        return groups.map { group in
+            let text = group.map(\.summary).joined(separator: " and ")
+            return groups.count > 1 && group.count > 1 ? "(\(text))" : text
+        }
+        .joined(separator: " or ")
     }
 }
 
 extension NetworkCondition {
-    func isSatisfied(by snapshot: NetworkSnapshot) -> Bool {
+    /// nil when it can't be told yet: a Wi-Fi name macOS is hiding (no
+    /// Location access) or no location fix. Everything else is read
+    /// directly from the network state, so it's always known.
+    func evaluate(_ snapshot: NetworkSnapshot) -> Bool? {
         let connections = snapshot.connections
         switch self {
         case .ssid(let want):
-            return connections.contains { $0.ssid?.caseInsensitiveCompare(want) == .orderedSame }
+            let wifi = connections.filter { $0.kind == .wifi }
+            if wifi.contains(where: { $0.ssid?.caseInsensitiveCompare(want) == .orderedSame }) { return true }
+            return wifi.contains { $0.ssid == nil } ? nil : false
         case .wiredNetwork(_, let routerMAC):
             let want = MACAddress.normalize(routerMAC)
             return connections.contains { $0.kind == .ethernet && $0.routerMAC.map(MACAddress.normalize) == want }
@@ -41,8 +78,12 @@ extension NetworkCondition {
             guard let subnet = IPv4Subnet(cidr: cidr) else { return false }
             return connections.contains { $0.localIPv4.map(subnet.contains) ?? false }
         case .location(_, let lat, let lon, let radius):
-            guard let here = snapshot.location else { return false }
+            guard let here = snapshot.location else { return nil }
             return here.distanceMeters(toLatitude: lat, longitude: lon) <= radius
         }
+    }
+
+    func isSatisfied(by snapshot: NetworkSnapshot) -> Bool {
+        evaluate(snapshot) == true
     }
 }

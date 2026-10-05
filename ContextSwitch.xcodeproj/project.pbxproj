@@ -9,6 +9,7 @@
 /* Begin PBXBuildFile section */
 		002AB88FE8CC68BB9FD58AA5 /* NetworkSnapshot.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0F637AF2683C4D624DB81088 /* NetworkSnapshot.swift */; };
 		0332338355F12303D745433A /* AppRule.swift in Sources */ = {isa = PBXBuildFile; fileRef = 62D700FC8762B9879A0E2872 /* AppRule.swift */; };
+		0469E38BAD85DF30961E33B0 /* ConditionClause.swift in Sources */ = {isa = PBXBuildFile; fileRef = E175240D0020F1DD73AD9540 /* ConditionClause.swift */; };
 		04EC4F78D4189A187FDC1F1E /* NetworkCondition.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3E8664EB3D823CDE3B526FB3 /* NetworkCondition.swift */; };
 		07DC8B3ED52F68D342417A36 /* ProfileEditorView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 15854A2289A36DB1C82E220D /* ProfileEditorView.swift */; };
 		18627342F08C9C8FCC9FCA18 /* NetworkInventory.swift in Sources */ = {isa = PBXBuildFile; fileRef = 88731A376373C52C639701CF /* NetworkInventory.swift */; };
@@ -28,6 +29,7 @@
 		AF72E5912E3FBF0173A57991 /* ContextSwitchApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9A736CFC1950FF82E6628661 /* ContextSwitchApp.swift */; };
 		B90B6948889A63C55F4A121F /* AppLauncherService.swift in Sources */ = {isa = PBXBuildFile; fileRef = CCC437B0C4361C07CA76CD03 /* AppLauncherService.swift */; };
 		BA8BAB06672C7DEF51029407 /* MatchingTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 42304763772E1FADBD8350FA /* MatchingTests.swift */; };
+		CD1B8742049E2970636AD027 /* ConditionClause.swift in Sources */ = {isa = PBXBuildFile; fileRef = E175240D0020F1DD73AD9540 /* ConditionClause.swift */; };
 		DF48BCB9D4587B2402719FEB /* AppPickerView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9E16E57FF37B5DC98BC34C0B /* AppPickerView.swift */; };
 		EFB07DBE5DB284284BFEDB46 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 2D1131C29BABE02C0BD27538 /* Assets.xcassets */; };
 		F6A926864F20F59BC8996EFC /* NetworkSnapshot.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0F637AF2683C4D624DB81088 /* NetworkSnapshot.swift */; };
@@ -59,6 +61,7 @@
 		C6BD4E312063F5BC9E114776 /* AppState.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppState.swift; sourceTree = "<group>"; };
 		CCC437B0C4361C07CA76CD03 /* AppLauncherService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppLauncherService.swift; sourceTree = "<group>"; };
 		D0C420A34DD7A0A320C6C139 /* SettingsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SettingsView.swift; sourceTree = "<group>"; };
+		E175240D0020F1DD73AD9540 /* ConditionClause.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ConditionClause.swift; sourceTree = "<group>"; };
 		F5EE88FB0A11F997B97F0696 /* ProfileMatcher.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ProfileMatcher.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
@@ -127,6 +130,7 @@
 			isa = PBXGroup;
 			children = (
 				62D700FC8762B9879A0E2872 /* AppRule.swift */,
+				E175240D0020F1DD73AD9540 /* ConditionClause.swift */,
 				3E8664EB3D823CDE3B526FB3 /* NetworkCondition.swift */,
 				0F637AF2683C4D624DB81088 /* NetworkSnapshot.swift */,
 				49060D28651DB788E0D57D5D /* Profile.swift */,
@@ -260,6 +264,7 @@
 				DF48BCB9D4587B2402719FEB /* AppPickerView.swift in Sources */,
 				0332338355F12303D745433A /* AppRule.swift in Sources */,
 				4D6BBB13C840A0B233B1B341 /* AppState.swift in Sources */,
+				0469E38BAD85DF30961E33B0 /* ConditionClause.swift in Sources */,
 				83B9E3147C661A6B644D608D /* ConditionPickerView.swift in Sources */,
 				AF72E5912E3FBF0173A57991 /* ContextSwitchApp.swift in Sources */,
 				4667290E055BB046A54FD419 /* LocationMonitor.swift in Sources */,
@@ -283,6 +288,7 @@
 			buildActionMask = 2147483647;
 			files = (
 				6DF5439CB2698091A1F0B718 /* AppRule.swift in Sources */,
+				CD1B8742049E2970636AD027 /* ConditionClause.swift in Sources */,
 				BA8BAB06672C7DEF51029407 /* MatchingTests.swift in Sources */,
 				04EC4F78D4189A187FDC1F1E /* NetworkCondition.swift in Sources */,
 				F6A926864F20F59BC8996EFC /* NetworkSnapshot.swift in Sources */,

@@ -99,10 +99,9 @@ struct ConditionPickerView: View {
         switch kind {
         case .wifi:
             Picker("Network", selection: $ssidChoice) {
+                placeholder("Select a network", while: ssidChoice)
                 if let currentSSID {
                     Text("\(currentSSID) — connected").tag(currentSSID)
-                } else {
-                    Text("Select a network").tag("")
                 }
                 Section("Saved Networks") {
                     ForEach(savedNetworks.filter { $0 != currentSSID }, id: \.self) { Text($0).tag($0) }
@@ -128,6 +127,7 @@ struct ConditionPickerView: View {
                      : "Couldn't read the router's address yet. Try again in a moment.")
             } else {
                 Picker("Connection", selection: $wiredRouterMAC) {
+                    placeholder("Select a connection", while: wiredRouterMAC)
                     ForEach(wiredConnections, id: \.self) { connection in
                         Text("\(connection.serviceName) — router \(connection.routerIPv4 ?? "?")")
                             .tag(connection.routerMAC ?? "")
@@ -142,6 +142,7 @@ struct ConditionPickerView: View {
                 hint("No Ethernet adapters are set up on this Mac.")
             } else {
                 Picker("Adapter", selection: $adapterChoice) {
+                    placeholder("Select an adapter", while: adapterChoice)
                     ForEach(sortedAdapters) { adapter in
                         Text(isConnected(adapter) ? "\(adapter.name) — connected" : adapter.name)
                             .tag(adapter.name)
@@ -153,6 +154,7 @@ struct ConditionPickerView: View {
         case .dnsDomain:
             if !snapshot.dnsDomains.isEmpty {
                 Picker("Domain", selection: $domainChoice) {
+                    placeholder("Select a domain", while: domainChoice)
                     ForEach(snapshot.dnsDomains, id: \.self) { Text($0).tag($0) }
                     Divider()
                     Text("Other…").tag(Self.other)
@@ -186,6 +188,16 @@ struct ConditionPickerView: View {
                     .disabled(snapshot.primary == nil)
             }
             hint(advancedHint)
+        }
+    }
+
+    /// A "" item while nothing is selected yet. Defaults are filled in by
+    /// prefill() after the first render, and SwiftUI faults if a Picker's
+    /// selection has no matching tag even for that one frame.
+    @ViewBuilder
+    private func placeholder(_ text: String, while selection: String) -> some View {
+        if selection.isEmpty {
+            Text(text).tag("")
         }
     }
 

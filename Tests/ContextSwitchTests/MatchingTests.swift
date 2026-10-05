@@ -74,8 +74,8 @@ private let dock = NetworkConnection(
 
 @Suite struct ProfileMatcherTests {
     let fallback = Profile(name: "Default")
-    let home = Profile(name: "Home", conditions: [.ssid("Home-WiFi")], priority: 1)
-    let homeDesk = Profile(name: "Home Desk", conditions: [.ssid("Home-WiFi"), .ethernetAdapter("USB 10/100/1000 LAN")], priority: 2)
+    let home = Profile(name: "Home", conditions: [ConditionClause(.ssid("Home-WiFi"))], priority: 1)
+    let homeDesk = Profile(name: "Home Desk", conditions: [ConditionClause(.ssid("Home-WiFi")), ConditionClause(.ethernetAdapter("USB 10/100/1000 LAN"))], priority: 2)
 
     @Test func highestPriorityMatchWins() {
         let profiles = [fallback, home, homeDesk]
@@ -87,6 +87,63 @@ private let dock = NetworkConnection(
         let profiles = [fallback, home]
         #expect(ProfileMatcher.bestMatch(for: .empty, in: profiles)?.name == "Default")
         #expect(ProfileMatcher.bestMatch(for: .empty, in: [home]) == nil)
+    }
+}
+
+@Suite struct BooleanLogicTests {
+    let homeWiFi = NetworkCondition.ssid("Home-WiFi")
+    let dockAdapter = NetworkCondition.ethernetAdapter("USB 10/100/1000 LAN")
+    let corpDNS = NetworkCondition.dnsDomain("corp.example.com")
+
+    private func profile(_ clauses: ConditionClause...) -> Profile {
+        Profile(name: "Test", conditions: clauses)
+    }
+
+    @Test func andBindsTighterThanOr() {
+        // Home-WiFi and dock or corp DNS  ==  (Home-WiFi and dock) or corp DNS
+        let p = profile(ConditionClause(homeWiFi), ConditionClause(dockAdapter), ConditionClause(corpDNS, connector: .or))
+        #expect(p.matches(NetworkSnapshot(connections: [dock, wifi])))             // first group
+        #expect(p.matches(NetworkSnapshot(connections: [dock], dnsDomains: ["corp.example.com"])))  // second group
+        #expect(!p.matches(NetworkSnapshot(connections: [wifi])))                  // Wi-Fi alone isn't enough
+        #expect(p.conditionSummary == "(Wi-Fi Network “Home-WiFi” and Ethernet Adapter “USB 10/100/1000 LAN”) or DNS Domain “corp.example.com”")
+    }
+
+    @Test func notInvertsACondition() {
+        let p = profile(ConditionClause(homeWiFi), ConditionClause(dockAdapter, isNegated: true))
+        #expect(p.matches(NetworkSnapshot(connections: [wifi])))         // home, undocked
+        #expect(!p.matches(NetworkSnapshot(connections: [dock, wifi])))  // home, docked
+        #expect(p.conditionSummary == "Wi-Fi Network “Home-WiFi” and not Ethernet Adapter “USB 10/100/1000 LAN”")
+    }
+
+    @Test func connectorOnFirstClauseIsIgnored() {
+        let p = profile(ConditionClause(homeWiFi, connector: .or), ConditionClause(dockAdapter))
+        #expect(p.conditionGroups.count == 1)
+        #expect(!p.matches(NetworkSnapshot(connections: [wifi])))
+    }
+
+    @Test func notOnAHiddenWiFiNameIsUnknownNotTrue() {
+        var hidden = wifi
+        hidden.ssid = nil  // connected, but no Location access
+        let p = profile(ConditionClause(homeWiFi, isNegated: true))
+        #expect(p.evaluate(NetworkSnapshot(connections: [hidden])) == nil)
+        #expect(!p.matches(NetworkSnapshot(connections: [hidden])))
+        // With no Wi-Fi connection at all we do know: not on Home-WiFi.
+        #expect(p.matches(NetworkSnapshot(connections: [dock])))
+    }
+
+    @Test func unknownDoesNotBlockAnotherGroup() {
+        var hidden = wifi
+        hidden.ssid = nil
+        let p = profile(ConditionClause(homeWiFi), ConditionClause(corpDNS, connector: .or))
+        #expect(p.matches(NetworkSnapshot(connections: [hidden], dnsDomains: ["corp.example.com"])))
+        #expect(p.evaluate(NetworkSnapshot(connections: [hidden])) == nil)
+    }
+
+    @Test func falseInAGroupOutweighsUnknown() {
+        let place = NetworkCondition.location(name: "Home", latitude: 0, longitude: 0, radiusMeters: 100)
+        let p = profile(ConditionClause(place), ConditionClause(dockAdapter))
+        // No location fix (unknown) and not docked (false) → definitely false.
+        #expect(p.evaluate(NetworkSnapshot(connections: [wifi])) == false)
     }
 }
 
@@ -104,13 +161,21 @@ private let dock = NetworkConnection(
         #expect(rule.bundleIdentifier == "com.apple.calculator")
         #expect(rule.path == nil)
         #expect(!rule.isExecutable)
-        #expect(profiles.first?.conditions == [.gatewayIP("10.0.0.1")])
+        // Bare conditions from before boolean logic become plain "and" clauses.
+        let clause = try #require(profiles.first?.conditions.first)
+        #expect(clause.condition == .gatewayIP("10.0.0.1"))
+        #expect(clause.connector == .and)
+        #expect(!clause.isNegated)
     }
 
     @Test func roundTripsNewConditionsAndExecutables() throws {
         let profile = Profile(
             name: "Office",
-            conditions: [.wiredNetwork(name: "Office LAN", routerMAC: "00:1a:2b:3c:4d:5e"), .ethernetAdapter("USB 10/100/1000 LAN"), .dnsDomain("corp.example.com")],
+            conditions: [
+                ConditionClause(.wiredNetwork(name: "Office LAN", routerMAC: "00:1a:2b:3c:4d:5e")),
+                ConditionClause(.ethernetAdapter("USB 10/100/1000 LAN"), isNegated: true),
+                ConditionClause(.dnsDomain("corp.example.com"), connector: .or),
+            ],
             appRules: [AppRule(bundleIdentifier: nil, path: "/usr/local/bin/sync-notes", displayName: "sync-notes", action: .launch)]
         )
         let decoded = try JSONDecoder().decode(Profile.self, from: JSONEncoder().encode(profile))

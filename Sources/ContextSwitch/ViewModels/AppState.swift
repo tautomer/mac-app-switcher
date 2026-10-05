@@ -88,7 +88,7 @@ final class AppState: ObservableObject {
     /// True if any profile has a condition that can't match without
     /// Location access (Wi-Fi names, places).
     var needsLocationPermission: Bool {
-        profiles.contains { $0.conditions.contains(where: \.requiresLocationPermission) }
+        profiles.contains { $0.conditions.contains(where: \.condition.requiresLocationPermission) }
     }
 
     func requestLocationPermission() {
@@ -106,8 +106,8 @@ final class AppState: ObservableObject {
 
     private func syncLocationMonitoring() {
         let regions = profiles.flatMap { profile in
-            profile.conditions.compactMap { condition -> (name: String, latitude: Double, longitude: Double, radius: Double)? in
-                if case .location(let name, let lat, let lon, let radius) = condition {
+            profile.conditions.compactMap { clause -> (name: String, latitude: Double, longitude: Double, radius: Double)? in
+                if case .location(let name, let lat, let lon, let radius) = clause.condition {
                     return (name, lat, lon, radius)
                 }
                 return nil

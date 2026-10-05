@@ -128,7 +128,7 @@ private struct ProfileDetailEditor: View {
     @State private var showingConditionPicker = false
 
     private var needsLocationAccess: Bool {
-        profile.conditions.contains(where: \.requiresLocationPermission) && !appState.isLocationAuthorized
+        profile.conditions.contains(where: \.condition.requiresLocationPermission) && !appState.isLocationAuthorized
     }
 
     var body: some View {
@@ -136,33 +136,29 @@ private struct ProfileDetailEditor: View {
             Section("Profile") {
                 TextField("Name", text: $profile.name)
                 Stepper("Priority: \(profile.priority)", value: $profile.priority)
-                Text(profile.conditions.isEmpty
-                     ? "No conditions — this is the fallback profile, used when nothing else matches."
-                     : "Matches when ALL conditions below are true.")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
             }
 
-            Section("Conditions") {
-                ForEach(profile.conditions) { condition in
-                    HStack {
-                        Label(condition.kindLabel, systemImage: condition.systemImage)
-                            .foregroundStyle(.secondary)
-                        Text(condition.valueLabel)
-                            .lineLimit(1)
-                            .truncationMode(.middle)
-                        Spacer()
-                        RemoveButton { profile.conditions.removeAll { $0.id == condition.id } }
-                    }
+            Section {
+                ForEach($profile.conditions) { $clause in
+                    ConditionRow(
+                        clause: $clause,
+                        isFirst: clause.id == profile.conditions.first?.id,
+                        status: clause.evaluate(appState.snapshot),
+                        onRemove: { profile.conditions.removeAll { $0.id == clause.id } }
+                    )
                 }
                 if needsLocationAccess {
-                    LocationAccessBanner(appState: appState, message: "Wi-Fi and Place conditions can't match until ContextSwitch has Location access.")
+                    LocationAccessBanner(appState: appState, message: "Wi-Fi and Place conditions can't be checked until ContextSwitch has Location access.")
                 }
                 Button {
                     showingConditionPicker = true
                 } label: {
                     Label("Add Condition…", systemImage: "plus")
                 }
+            } header: {
+                Text("Conditions")
+            } footer: {
+                conditionsFooter
             }
 
             Section("Apps") {
@@ -207,10 +203,98 @@ private struct ProfileDetailEditor: View {
         }
         .sheet(isPresented: $showingConditionPicker) {
             ConditionPickerView(appState: appState) { condition in
-                if !profile.conditions.contains(condition) {
-                    profile.conditions.append(condition)
+                profile.conditions.append(ConditionClause(condition))
+            }
+        }
+    }
+
+    @ViewBuilder
+    private var conditionsFooter: some View {
+        if profile.conditions.isEmpty {
+            Text("No conditions — this is the fallback profile, used when nothing else matches.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+        } else {
+            VStack(alignment: .leading, spacing: 4) {
+                Text("Matches when \(profile.conditionSummary).")
+                if profile.conditions.count > 1 {
+                    Text("“and” is checked before “or”: A and B or C means (A and B) or C.")
+                }
+                switch profile.evaluate(appState.snapshot) {
+                case true?:
+                    Label("Matches the current network", systemImage: "checkmark.circle.fill")
+                        .foregroundStyle(.green)
+                case false?:
+                    Label("Doesn't match the current network", systemImage: "xmark.circle")
+                case nil:
+                    Label("Can't tell yet — waiting on Location access or a location fix", systemImage: "questionmark.circle")
+                        .foregroundStyle(.orange)
                 }
             }
+            .font(.caption)
+            .foregroundStyle(.secondary)
+            .textSelection(.enabled)
+        }
+    }
+}
+
+/// One condition row: `If`/`and`/`or` ▸ `not` ▸ condition ▸ live status.
+private struct ConditionRow: View {
+    @Binding var clause: ConditionClause
+    let isFirst: Bool
+    /// The clause's value on the current network; nil = can't tell.
+    let status: Bool?
+    let onRemove: () -> Void
+
+    var body: some View {
+        HStack(spacing: 8) {
+            Group {
+                if isFirst {
+                    Text("If")
+                        .foregroundStyle(.secondary)
+                } else {
+                    Picker("Connector", selection: $clause.connector) {
+                        Text("and").tag(ConditionClause.Connector.and)
+                        Text("or").tag(ConditionClause.Connector.or)
+                    }
+                    .labelsHidden()
+                    .fixedSize()
+                }
+            }
+            .frame(width: 64, alignment: .leading)
+
+            Toggle("not", isOn: $clause.isNegated)
+                .toggleStyle(.button)
+                .controlSize(.small)
+                .help("Negate this condition")
+
+            Label(clause.condition.kindLabel, systemImage: clause.condition.systemImage)
+                .foregroundStyle(.secondary)
+                .lineLimit(1)
+            Text(clause.condition.valueLabel)
+                .lineLimit(1)
+                .truncationMode(.middle)
+            Spacer()
+            statusIcon
+            RemoveButton(action: onRemove)
+        }
+    }
+
+    @ViewBuilder
+    private var statusIcon: some View {
+        switch status {
+        case true?:
+            Image(systemName: "checkmark.circle.fill")
+                .foregroundStyle(.green)
+                .help("True on the current network")
+        case false?:
+            Image(systemName: "xmark.circle")
+                .foregroundStyle(.secondary)
+                .help("False on the current network")
+        case nil:
+            Image(systemName: "questionmark.circle")
+                .foregroundStyle(.orange)
+                .help("Can't tell yet — needs Location access or a location fix")
         }
     }
 }
