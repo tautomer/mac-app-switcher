@@ -10,7 +10,14 @@ settings:
     SWIFT_VERSION: "6.0"
     MACOSX_DEPLOYMENT_TARGET: "14.0"
     GENERATE_INFOPLIST_FILE: NO
-    ENABLE_HARDENED_RUNTIME: NO
+    # Required for notarization (see .github/workflows/release.yml).
+    ENABLE_HARDENED_RUNTIME: YES
+  configs:
+    # Debug builds load a separate ContextSwitch.debug.dylib, which the
+    # Hardened Runtime only accepts when both are signed by the same Apple
+    # team — a self-signed certificate (Config/Local.xcconfig) has none.
+    Debug:
+      ENABLE_HARDENED_RUNTIME: NO
 
 targets:
   ContextSwitch:
@@ -22,19 +29,32 @@ targets:
     info:
       path: Sources/ContextSwitch/Info.plist
       properties:
+        # From the build settings below, so CI can stamp releases.
+        CFBundleShortVersionString: $(MARKETING_VERSION)
+        CFBundleVersion: $(CURRENT_PROJECT_VERSION)
         LSUIElement: true
         LSApplicationCategoryType: public.app-category.utilities
         NSLocationUsageDescription: "ContextSwitch uses your location to read the name of the Wi-Fi network you're on and to detect saved places (like Home or Office), so it can switch app profiles automatically."
         NSLocationWhenInUseUsageDescription: "ContextSwitch uses your location to read the name of the Wi-Fi network you're on and to detect saved places (like Home or Office), so it can switch app profiles automatically."
         NSLocationAlwaysAndWhenInUseUsageDescription: "ContextSwitch uses your location to detect arrival/departure from saved places even when the app isn't in the foreground, so profile switching keeps working in the background."
         NSHumanReadableCopyright: "Copyright © 2026. All rights reserved."
+    entitlements:
+      path: Sources/ContextSwitch/ContextSwitch.entitlements
+      properties:
+        # Under the Hardened Runtime, Location (and with it Wi-Fi names)
+        # must be requested explicitly.
+        com.apple.security.personal-information.location: true
+    # Signing style/identity live here (ad-hoc by default, optionally
+    # overridden by a git-ignored Config/Local.xcconfig).
+    configFiles:
+      Debug: Config/Signing.xcconfig
+      Release: Config/Signing.xcconfig
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.contextswitch.app
         PRODUCT_NAME: ContextSwitch
         MARKETING_VERSION: "0.1.0"
         CURRENT_PROJECT_VERSION: "1"
-        CODE_SIGN_STYLE: Automatic
         # Sources/ContextSwitch/AppIcon.icon — an Icon Composer document
         # (open it in Xcode ▸ Open Developer Tool ▸ Icon Composer to edit).
         ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon

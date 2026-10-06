@@ -3,3 +3,7 @@ DerivedData/
 *.xcuserstate
 xcuserdata/
 .build/
+# Output of scripts/build.sh.
+/build/
+# Per-machine signing override (see Config/Signing.xcconfig).
+Config/Local.xcconfig

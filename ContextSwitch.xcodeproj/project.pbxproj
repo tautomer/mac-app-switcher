@@ -47,6 +47,7 @@
 		15854A2289A36DB1C82E220D /* ProfileEditorView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ProfileEditorView.swift; sourceTree = "<group>"; };
 		254C75A0CCEA4CB35E304EE4 /* LocationMonitor.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LocationMonitor.swift; sourceTree = "<group>"; };
 		28D7EBD66494D89AB8274599 /* ContextSwitchTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = ContextSwitchTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
+		2AB675527B574FA15589D3E8 /* Signing.xcconfig */ = {isa = PBXFileReference; lastKnownFileType = text.xcconfig; path = Signing.xcconfig; sourceTree = "<group>"; };
 		2B3EDAC73A267A9D5D442BEE /* MenuBarContentView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MenuBarContentView.swift; sourceTree = "<group>"; };
 		2D1131C29BABE02C0BD27538 /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
 		3E8664EB3D823CDE3B526FB3 /* NetworkCondition.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NetworkCondition.swift; sourceTree = "<group>"; };
@@ -64,6 +65,7 @@
 		C6BD4E312063F5BC9E114776 /* AppState.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppState.swift; sourceTree = "<group>"; };
 		CCC437B0C4361C07CA76CD03 /* AppLauncherService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppLauncherService.swift; sourceTree = "<group>"; };
 		D0C420A34DD7A0A320C6C139 /* SettingsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SettingsView.swift; sourceTree = "<group>"; };
+		DAC235B8BD0B77B05385B044 /* ContextSwitch.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = ContextSwitch.entitlements; sourceTree = "<group>"; };
 		E175240D0020F1DD73AD9540 /* ConditionClause.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ConditionClause.swift; sourceTree = "<group>"; };
 		E54655A85DC321524FEB96E8 /* DebugSnapshot.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DebugSnapshot.swift; sourceTree = "<group>"; };
 		F5EE88FB0A11F997B97F0696 /* ProfileMatcher.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ProfileMatcher.swift; sourceTree = "<group>"; };
@@ -102,10 +104,19 @@
 		4CE76393FEBC5ED938EF1ED6 = {
 			isa = PBXGroup;
 			children = (
+				85C1D263690211F45AE12023 /* Config */,
 				099ADC20B8E9BE4879D78109 /* Sources */,
 				D2094B1DCA443D5BC150863E /* Tests */,
 				D85AFB0AE2B332E24AF8C966 /* Products */,
 			);
+			sourceTree = "<group>";
+		};
+		85C1D263690211F45AE12023 /* Config */ = {
+			isa = PBXGroup;
+			children = (
+				2AB675527B574FA15589D3E8 /* Signing.xcconfig */,
+			);
+			path = Config;
 			sourceTree = "<group>";
 		};
 		92D64F57D1E572E2453C5B8E /* Services */ = {
@@ -147,6 +158,7 @@
 			children = (
 				40F14D25E43872F9ECD87AD9 /* AppIcon.icon */,
 				2D1131C29BABE02C0BD27538 /* Assets.xcassets */,
+				DAC235B8BD0B77B05385B044 /* ContextSwitch.entitlements */,
 				9A736CFC1950FF82E6628661 /* ContextSwitchApp.swift */,
 				B4BADB32AAA83A2F020EB0F5 /* Info.plist */,
 				E510D43DBD61161D05F1DCC9 /* Debug */,
@@ -419,9 +431,10 @@
 		};
 		986219F271D866B3730EA877 /* Debug */ = {
 			isa = XCBuildConfiguration;
+			baseConfigurationReference = 2AB675527B574FA15589D3E8 /* Signing.xcconfig */;
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
-				CODE_SIGN_STYLE = Automatic;
+				CODE_SIGN_ENTITLEMENTS = Sources/ContextSwitch/ContextSwitch.entitlements;
 				COMBINE_HIDPI_IMAGES = YES;
 				CURRENT_PROJECT_VERSION = 1;
 				INFOPLIST_FILE = Sources/ContextSwitch/Info.plist;
@@ -439,9 +452,10 @@
 		};
 		C7CE07A7CF95581040B959BA /* Release */ = {
 			isa = XCBuildConfiguration;
+			baseConfigurationReference = 2AB675527B574FA15589D3E8 /* Signing.xcconfig */;
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
-				CODE_SIGN_STYLE = Automatic;
+				CODE_SIGN_ENTITLEMENTS = Sources/ContextSwitch/ContextSwitch.entitlements;
 				COMBINE_HIDPI_IMAGES = YES;
 				CURRENT_PROJECT_VERSION = 1;
 				INFOPLIST_FILE = Sources/ContextSwitch/Info.plist;
@@ -492,7 +506,7 @@
 				CLANG_WARN__DUPLICATE_METHOD_MATCH = YES;
 				COPY_PHASE_STRIP = NO;
 				DEBUG_INFORMATION_FORMAT = "dwarf-with-dsym";
-				ENABLE_HARDENED_RUNTIME = NO;
+				ENABLE_HARDENED_RUNTIME = YES;
 				ENABLE_NS_ASSERTIONS = NO;
 				ENABLE_STRICT_OBJC_MSGSEND = YES;
 				GCC_C_LANGUAGE_STANDARD = gnu11;

@@ -38,8 +38,11 @@ struct SettingsView: View {
             }
         }
         .formStyle(.grouped)
+        // A grouped Form is a scroll view that will happily fill the whole
+        // screen; size the window to the content instead.
+        .scrollDisabled(true)
+        .fixedSize(horizontal: false, vertical: true)
         .frame(width: 460)
-        .frame(minHeight: 420)
         .keepsAppActiveWhileOpen()
         .onAppear { appState.refreshNetwork() }
     }

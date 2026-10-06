@@ -166,7 +166,9 @@ final class AppLauncherService {
         guard count > 0 else { return [] }
         var buffer = [CChar](repeating: 0, count: 4 * Int(MAXPATHLEN))  // PROC_PIDPATHINFO_MAXSIZE
         return pids.prefix(Int(count)).filter { pid in
-            pid > 0 && proc_pidpath(pid, &buffer, UInt32(buffer.count)) > 0 && String(cString: buffer) == target
+            guard pid > 0, proc_pidpath(pid, &buffer, UInt32(buffer.count)) > 0 else { return false }
+            let path = String(decoding: buffer.prefix { $0 != 0 }.map { UInt8(bitPattern: $0) }, as: UTF8.self)
+            return path == target
         }
     }
 }

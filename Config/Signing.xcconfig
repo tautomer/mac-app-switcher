@@ -1,0 +1,19 @@
+// Code signing for local builds of ContextSwitch.
+//
+// Default: ad-hoc ("Sign to Run Locally"). It works on any Mac, CI included,
+// but the app's identity changes with every build, so macOS forgets
+// permissions such as Location after each rebuild.
+//
+// To sign your own builds with a stable identity instead, create
+// Config/Local.xcconfig (git-ignored) with, for example:
+//
+//   CODE_SIGN_STYLE = Manual
+//   CODE_SIGN_IDENTITY = ContextSwitch Self-Signed
+//
+// Release builds made by CI pass their own signing settings on the command
+// line (see .github/workflows/release.yml), which override this file.
+
+CODE_SIGN_STYLE = Automatic
+CODE_SIGN_IDENTITY = -
+
+#include? "Local.xcconfig"
