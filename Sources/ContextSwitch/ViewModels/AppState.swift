@@ -90,6 +90,13 @@ final class AppState: ObservableObject {
         .store(in: &cancellables)
         launcher.onExecutableExit = { [weak self] in self?.runStateRevision += 1 }
 
+        DistributedNotificationCenter.default()
+            .publisher(for: RemoteCommand.requestName)
+            .compactMap { RemoteCommand.Request(userInfo: $0.userInfo) }
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] in self?.handle($0) }
+            .store(in: &cancellables)
+
         start()
     }
 
@@ -167,23 +174,43 @@ final class AppState: ObservableObject {
         if enabled { reevaluate() }
     }
 
-    private func apply(_ profile: Profile) {
+    @discardableResult
+    private func apply(_ profile: Profile) -> [(AppRule, EnforceOutcome)] {
         activeProfile = profile
         Self.defaults.set(profile.id.uuidString, forKey: DefaultsKey.lastActiveProfile)
-        for rule in profile.appRules {
-            enforce(rule.effectiveAction, for: rule)
-        }
+        return profile.appRules.map { ($0, launcher.enforce($0.effectiveAction, for: $0)) }
     }
 
-    private func enforce(_ action: AppAction, for rule: AppRule) {
-        switch action {
-        case .launch:
-            if !launcher.isRunning(rule) { launcher.launch(rule) }
-        case .quit:
-            if launcher.isRunning(rule) { launcher.quit(rule) }
-        case .ignore:
-            break
+    // MARK: - Command line
+
+    /// `ContextSwitch --switch` / `--profile NAME` while the app is open: the
+    /// switch is done here, so the menu and active profile stay in sync, and
+    /// the reply tells the command line what happened. Auto-switch is left
+    /// as it is (unlike picking a profile from the menu).
+    private func handle(_ request: RemoteCommand.Request) {
+        guard request.profilesPath == store.fileURL.path else { return }
+        typealias CLI = CommandLineInterface
+        let reply: RemoteCommand.Reply
+        if let name = request.profileName {
+            if let profile = profiles.profile(named: name) {
+                var output = CLI.report(profile: profile, outcomes: apply(profile), reason: .named, dryRun: false)
+                if isAutoSwitchEnabled {
+                    output += "\nAuto-switch is on, so ContextSwitch will switch again when the network changes."
+                }
+                reply = .init(id: request.id, status: CLI.ExitStatus.success, output: output)
+            } else {
+                reply = .init(id: request.id, status: CLI.ExitStatus.unknownProfile,
+                              output: CLI.unknownProfileMessage(name, profiles: profiles))
+            }
+        } else if let best = ProfileMatcher.bestMatch(for: snapshot, in: profiles) {
+            let output = CLI.report(profile: best, outcomes: apply(best),
+                                    reason: best.isFallback ? .fallback : .matched, dryRun: false)
+            reply = .init(id: request.id, status: CLI.ExitStatus.success, output: output)
+        } else {
+            reply = .init(id: request.id, status: CLI.ExitStatus.noMatchingProfile,
+                          output: CLI.noMatchMessage(snapshot: snapshot, profiles: profiles))
         }
+        RemoteCommand.post(RemoteCommand.replyName, userInfo: reply.userInfo)
     }
 
     // MARK: - Per-app manual override
@@ -193,7 +220,7 @@ final class AppState: ObservableObject {
               let idx = updated.appRules.firstIndex(where: { $0.id == ruleID }) else { return }
         updated.appRules[idx].manualOverride = action
         activeProfile = updated
-        enforce(updated.appRules[idx].effectiveAction, for: updated.appRules[idx])
+        launcher.enforce(updated.appRules[idx].effectiveAction, for: updated.appRules[idx])
     }
 
     func isRunning(_ rule: AppRule) -> Bool {

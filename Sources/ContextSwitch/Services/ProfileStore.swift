@@ -8,7 +8,7 @@ import Combine
 final class ProfileStore: ObservableObject {
     @Published var profiles: [Profile] = []
 
-    private let fileURL: URL
+    let fileURL: URL
 
     init() {
         if let override = ProcessInfo.processInfo.environment["CONTEXTSWITCH_PROFILES"], !override.isEmpty {

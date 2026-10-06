@@ -73,6 +73,7 @@ targets:
       - path: Tests/ContextSwitchTests
       - path: Sources/ContextSwitch/Models
       - path: Sources/ContextSwitch/Services/ProfileMatcher.swift
+      - path: Sources/ContextSwitch/CLI/CommandLineCommand.swift
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.contextswitch.tests

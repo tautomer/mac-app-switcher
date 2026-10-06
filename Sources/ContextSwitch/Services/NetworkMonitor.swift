@@ -85,7 +85,9 @@ final class NetworkMonitor: ObservableObject, @unchecked Sendable {
         }
     }
 
-    private static func buildSnapshot() -> NetworkSnapshot {
+    /// A one-off, synchronous read of the current network (used directly by
+    /// the command line; the app goes through `refresh()`). No location.
+    static func buildSnapshot() -> NetworkSnapshot {
         var snap = NetworkSnapshot()
         guard let store = SCDynamicStoreCreate(nil, "ContextSwitch.read" as CFString, nil, nil) else {
             return snap

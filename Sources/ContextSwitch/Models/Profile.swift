@@ -76,6 +76,16 @@ struct Profile: Codable, Hashable, Identifiable {
     }
 }
 
+extension Array where Element == Profile {
+    /// Looks a profile up by name, ignoring case and accents. If names
+    /// repeat, the highest-priority one wins.
+    func profile(named name: String) -> Profile? {
+        let wanted = name.trimmingCharacters(in: .whitespaces)
+        return filter { $0.name.compare(wanted, options: [.caseInsensitive, .diacriticInsensitive]) == .orderedSame }
+            .max { $0.priority < $1.priority }
+    }
+}
+
 extension NetworkCondition {
     /// nil when it can't be told yet: a Wi-Fi name macOS is hiding (no
     /// Location access) or no location fix. Everything else is read

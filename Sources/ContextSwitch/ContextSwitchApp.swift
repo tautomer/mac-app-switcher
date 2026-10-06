@@ -1,6 +1,18 @@
 import SwiftUI
 
+/// Command-line options (see `CommandLineCommand`) run a one-off command and
+/// exit; any other launch starts the menu bar app.
 @main
+enum EntryPoint {
+    @MainActor
+    static func main() {
+        if let command = CommandLineCommand(arguments: Array(CommandLine.arguments.dropFirst())) {
+            exit(CommandLineInterface.run(command))
+        }
+        ContextSwitchApp.main()
+    }
+}
+
 struct ContextSwitchApp: App {
     @StateObject private var appState = AppState()
 

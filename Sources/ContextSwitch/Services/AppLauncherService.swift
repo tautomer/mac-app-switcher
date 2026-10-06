@@ -3,11 +3,40 @@ import AppKit
 import Darwin
 import UniformTypeIdentifiers
 
+/// What `AppLauncherService.enforce` did (or, for a dry run, would do).
+enum EnforceOutcome: Equatable {
+    case launched
+    case quit
+    case alreadyRunning
+    case notRunning
+    case ignored
+}
+
 /// Launches/quits the targets of `AppRule`s: app bundles through
 /// NSWorkspace, plain executables (scripts, CLI tools) through Process.
 @MainActor
 final class AppLauncherService {
     static let shared = AppLauncherService()
+
+    /// Brings `rule`'s target to the state `action` asks for. `onLaunched`
+    /// is called (later, on the main actor) only when a launch was started,
+    /// with whether it succeeded.
+    @discardableResult
+    func enforce(_ action: AppAction, for rule: AppRule, dryRun: Bool = false,
+                 onLaunched: (@MainActor @Sendable (Bool) -> Void)? = nil) -> EnforceOutcome {
+        switch action {
+        case .launch:
+            guard !isRunning(rule) else { return .alreadyRunning }
+            if !dryRun { launch(rule, completion: onLaunched) }
+            return .launched
+        case .quit:
+            guard isRunning(rule) else { return .notRunning }
+            if !dryRun { quit(rule) }
+            return .quit
+        case .ignore:
+            return .ignored
+        }
+    }
 
     /// Called when a launched executable exits, so the UI can refresh.
     /// (App launches/quits are observed via NSWorkspace notifications.)
@@ -26,15 +55,23 @@ final class AppLauncherService {
         return !runningApplications(for: rule).isEmpty
     }
 
-    func launch(_ rule: AppRule) {
+    /// `completion` always arrives asynchronously, on the main actor.
+    func launch(_ rule: AppRule, completion: (@MainActor @Sendable (Bool) -> Void)? = nil) {
         if rule.isExecutable {
-            if let path = rule.path { runExecutable(at: path) }
+            let started = rule.path.map(runExecutable(at:)) ?? false
+            Task { @MainActor in completion?(started) }
             return
         }
-        guard let url = appURL(for: rule) else { return }
+        guard let url = appURL(for: rule) else {
+            Task { @MainActor in completion?(false) }
+            return
+        }
         let config = NSWorkspace.OpenConfiguration()
         config.activates = false
-        NSWorkspace.shared.openApplication(at: url, configuration: config, completionHandler: nil)
+        NSWorkspace.shared.openApplication(at: url, configuration: config) { _, error in
+            let succeeded = error == nil
+            Task { @MainActor in completion?(succeeded) }
+        }
     }
 
     /// Sends a normal Quit / SIGTERM, so apps can still show "save
@@ -125,8 +162,9 @@ final class AppLauncherService {
         return NSWorkspace.shared.runningApplications.filter { $0.bundleURL?.path == path }
     }
 
-    private func runExecutable(at path: String) {
-        guard launchedProcesses[path]?.isRunning != true, Self.pids(forExecutableAt: path).isEmpty else { return }
+    /// true if it started, or was already running.
+    private func runExecutable(at path: String) -> Bool {
+        guard launchedProcesses[path]?.isRunning != true, Self.pids(forExecutableAt: path).isEmpty else { return true }
         let process = Process()
         process.executableURL = URL(fileURLWithPath: path)
         process.currentDirectoryURL = FileManager.default.homeDirectoryForCurrentUser
@@ -145,8 +183,10 @@ final class AppLauncherService {
         do {
             try process.run()
             launchedProcesses[path] = process
+            return true
         } catch {
             print("AppLauncherService: failed to run \(path): \(error)")
+            return false
         }
     }
 
