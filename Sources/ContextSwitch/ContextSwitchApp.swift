@@ -28,6 +28,9 @@ struct ContextSwitchApp: App {
             CommandGroup(replacing: .appSettings) {
                 SettingsCommand()
             }
+            #if DEBUG
+            DebugCommands()
+            #endif
         }
     }
 }

@@ -18,6 +18,7 @@
 		2997BC6DBC54E7B494DD1DE3 /* NetworkMonitor.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6A5130E4F24CE4FD9C3FC1F3 /* NetworkMonitor.swift */; };
 		4667290E055BB046A54FD419 /* LocationMonitor.swift in Sources */ = {isa = PBXBuildFile; fileRef = 254C75A0CCEA4CB35E304EE4 /* LocationMonitor.swift */; };
 		4D6BBB13C840A0B233B1B341 /* AppState.swift in Sources */ = {isa = PBXBuildFile; fileRef = C6BD4E312063F5BC9E114776 /* AppState.swift */; };
+		6A6930938DED941B6AA467CE /* DebugSnapshot.swift in Sources */ = {isa = PBXBuildFile; fileRef = E54655A85DC321524FEB96E8 /* DebugSnapshot.swift */; };
 		6D17C4E547F937006CC256CE /* SettingsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = D0C420A34DD7A0A320C6C139 /* SettingsView.swift */; };
 		6DF5439CB2698091A1F0B718 /* AppRule.swift in Sources */ = {isa = PBXBuildFile; fileRef = 62D700FC8762B9879A0E2872 /* AppRule.swift */; };
 		7D3AAE2018FDC314D4838DA2 /* WindowActivation.swift in Sources */ = {isa = PBXBuildFile; fileRef = BA9C2E456F02385E2006047A /* WindowActivation.swift */; };
@@ -62,6 +63,7 @@
 		CCC437B0C4361C07CA76CD03 /* AppLauncherService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppLauncherService.swift; sourceTree = "<group>"; };
 		D0C420A34DD7A0A320C6C139 /* SettingsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SettingsView.swift; sourceTree = "<group>"; };
 		E175240D0020F1DD73AD9540 /* ConditionClause.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ConditionClause.swift; sourceTree = "<group>"; };
+		E54655A85DC321524FEB96E8 /* DebugSnapshot.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DebugSnapshot.swift; sourceTree = "<group>"; };
 		F5EE88FB0A11F997B97F0696 /* ProfileMatcher.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ProfileMatcher.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
@@ -144,6 +146,7 @@
 				2D1131C29BABE02C0BD27538 /* Assets.xcassets */,
 				9A736CFC1950FF82E6628661 /* ContextSwitchApp.swift */,
 				B4BADB32AAA83A2F020EB0F5 /* Info.plist */,
+				E510D43DBD61161D05F1DCC9 /* Debug */,
 				B363B319D9A816D088BA6D2E /* Models */,
 				92D64F57D1E572E2453C5B8E /* Services */,
 				08302AB8083E82B6660BDE3D /* ViewModels */,
@@ -167,6 +170,14 @@
 				28D7EBD66494D89AB8274599 /* ContextSwitchTests.xctest */,
 			);
 			name = Products;
+			sourceTree = "<group>";
+		};
+		E510D43DBD61161D05F1DCC9 /* Debug */ = {
+			isa = PBXGroup;
+			children = (
+				E54655A85DC321524FEB96E8 /* DebugSnapshot.swift */,
+			);
+			path = Debug;
 			sourceTree = "<group>";
 		};
 /* End PBXGroup section */
@@ -267,6 +278,7 @@
 				0469E38BAD85DF30961E33B0 /* ConditionClause.swift in Sources */,
 				83B9E3147C661A6B644D608D /* ConditionPickerView.swift in Sources */,
 				AF72E5912E3FBF0173A57991 /* ContextSwitchApp.swift in Sources */,
+				6A6930938DED941B6AA467CE /* DebugSnapshot.swift in Sources */,
 				4667290E055BB046A54FD419 /* LocationMonitor.swift in Sources */,
 				8A1A9A65EFDA2C01894D05E8 /* LoginItemManager.swift in Sources */,
 				F7067B0C3069AF5373B19395 /* MenuBarContentView.swift in Sources */,

@@ -147,6 +147,47 @@ private let dock = NetworkConnection(
     }
 }
 
+@Suite struct GroupEditingTests {
+    private func names(_ p: Profile) -> [[String]] {
+        p.conditionGroups.map { $0.map(\.condition.valueLabel) }
+    }
+
+    @Test func addsToTheEndOfAGroup() {
+        var p = Profile(name: "T")
+        p.addCondition(.dnsDomain("a"), toGroup: 0)   // empty profile → first group
+        p.addCondition(.dnsDomain("b"), toGroup: 1)   // past the end → new "or" group
+        p.addCondition(.dnsDomain("c"), toGroup: 0)   // into the first group, before "b"
+        #expect(names(p) == [["a", "c"], ["b"]])
+    }
+
+    @Test func removingAGroupsFirstConditionKeepsTheGroup() {
+        var p = Profile(name: "T")
+        p.addCondition(.dnsDomain("a"), toGroup: 0)
+        p.addCondition(.dnsDomain("b"), toGroup: 1)
+        p.addCondition(.dnsDomain("c"), toGroup: 1)
+        p.removeCondition(id: p.conditionGroups[1][0].id)
+        #expect(names(p) == [["a"], ["c"]])
+    }
+
+    @Test func removingTheVeryFirstConditionKeepsLaterGroups() {
+        var p = Profile(name: "T")
+        p.addCondition(.dnsDomain("a"), toGroup: 0)
+        p.addCondition(.dnsDomain("b"), toGroup: 0)
+        p.addCondition(.dnsDomain("c"), toGroup: 1)
+        p.removeCondition(id: p.conditions[0].id)
+        #expect(names(p) == [["b"], ["c"]])
+    }
+
+    @Test func removingAOneConditionGroupDropsIt() {
+        var p = Profile(name: "T")
+        p.addCondition(.dnsDomain("a"), toGroup: 0)
+        p.addCondition(.dnsDomain("b"), toGroup: 1)
+        p.addCondition(.dnsDomain("c"), toGroup: 2)
+        p.removeCondition(id: p.conditionGroups[1][0].id)
+        #expect(names(p) == [["a"], ["c"]])
+    }
+}
+
 @Suite struct PersistenceTests {
     /// The shape profiles.json had before executables and Ethernet support.
     @Test func decodesProfilesFromPreviousVersion() throws {

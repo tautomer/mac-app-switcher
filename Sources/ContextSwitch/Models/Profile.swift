@@ -49,6 +49,31 @@ struct Profile: Codable, Hashable, Identifiable {
         }
         .joined(separator: " or ")
     }
+
+    /// Adds `condition` to the "and" group at `groupIndex`, or starts a new
+    /// "or" group when `groupIndex` is past the last group.
+    mutating func addCondition(_ condition: NetworkCondition, toGroup groupIndex: Int) {
+        let groups = conditionGroups
+        guard groups.indices.contains(groupIndex), let last = groups[groupIndex].last,
+              let position = conditions.firstIndex(where: { $0.id == last.id })
+        else {
+            conditions.append(ConditionClause(condition, connector: .or))
+            return
+        }
+        conditions.insert(ConditionClause(condition, connector: .and), at: position + 1)
+    }
+
+    /// Removes a clause. If it started its group, the next clause in that
+    /// group takes over the "or", so the group doesn't merge into the one
+    /// before it.
+    mutating func removeCondition(id: ConditionClause.ID) {
+        guard let index = conditions.firstIndex(where: { $0.id == id }) else { return }
+        let removed = conditions.remove(at: index)
+        let startedGroup = index == 0 || removed.connector == .or
+        if startedGroup, conditions.indices.contains(index), conditions[index].connector == .and {
+            conditions[index].connector = .or
+        }
+    }
 }
 
 extension NetworkCondition {

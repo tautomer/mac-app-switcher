@@ -124,8 +124,15 @@ private struct ProfileDetailEditor: View {
     @ObservedObject var appState: AppState
     @Binding var profile: Profile
 
+    /// Which "and" group the condition sheet adds to; past the last group
+    /// means a new "or" group.
+    private struct ConditionTarget: Identifiable {
+        let groupIndex: Int
+        var id: Int { groupIndex }
+    }
+
     @State private var showingAppPicker = false
-    @State private var showingConditionPicker = false
+    @State private var conditionTarget: ConditionTarget?
 
     private var needsLocationAccess: Bool {
         profile.conditions.contains(where: \.condition.requiresLocationPermission) && !appState.isLocationAuthorized
@@ -138,28 +145,7 @@ private struct ProfileDetailEditor: View {
                 Stepper("Priority: \(profile.priority)", value: $profile.priority)
             }
 
-            Section {
-                ForEach($profile.conditions) { $clause in
-                    ConditionRow(
-                        clause: $clause,
-                        isFirst: clause.id == profile.conditions.first?.id,
-                        status: clause.evaluate(appState.snapshot),
-                        onRemove: { profile.conditions.removeAll { $0.id == clause.id } }
-                    )
-                }
-                if needsLocationAccess {
-                    LocationAccessBanner(appState: appState, message: "Wi-Fi and Place conditions can't be checked until ContextSwitch has Location access.")
-                }
-                Button {
-                    showingConditionPicker = true
-                } label: {
-                    Label("Add Condition…", systemImage: "plus")
-                }
-            } header: {
-                Text("Conditions")
-            } footer: {
-                conditionsFooter
-            }
+            conditionSections
 
             Section("Apps") {
                 ForEach($profile.appRules) { $rule in
@@ -193,6 +179,7 @@ private struct ProfileDetailEditor: View {
                 } label: {
                     Label("Add App…", systemImage: "plus")
                 }
+                .buttonStyle(.borderless)
             }
         }
         .formStyle(.grouped)
@@ -201,80 +188,164 @@ private struct ProfileDetailEditor: View {
                 profile.appRules.append(rule)
             }
         }
-        .sheet(isPresented: $showingConditionPicker) {
+        .sheet(item: $conditionTarget) { target in
             ConditionPickerView(appState: appState) { condition in
-                profile.conditions.append(ConditionClause(condition))
+                profile.addCondition(condition, toGroup: target.groupIndex)
             }
         }
     }
 
+    // MARK: - Conditions
+
+    /// One card per "or" group; the conditions inside a card must all hold.
+    /// Showing the grouping makes "and binds before or" self-evident.
     @ViewBuilder
-    private var conditionsFooter: some View {
-        if profile.conditions.isEmpty {
-            Text("No conditions — this is the fallback profile, used when nothing else matches.")
-                .font(.caption)
-                .foregroundStyle(.secondary)
+    private var conditionSections: some View {
+        let groups = profile.conditionGroups
+        if groups.isEmpty {
+            Section {
+                addConditionButton(toGroup: 0)
+            } header: {
+                Text("Conditions")
+            } footer: {
+                Text("No conditions — this is the fallback profile, used when nothing else matches.")
+            }
         } else {
-            VStack(alignment: .leading, spacing: 4) {
-                Text("Matches when \(profile.conditionSummary).")
-                if profile.conditions.count > 1 {
-                    Text("“and” is checked before “or”: A and B or C means (A and B) or C.")
+            ForEach(Array(groups.enumerated()), id: \.element.first?.id) { index, group in
+                Section {
+                    ForEach(group) { clause in
+                        ConditionRow(
+                            clause: clause,
+                            isNegated: negationBinding(for: clause.id),
+                            status: clause.evaluate(appState.snapshot),
+                            onRemove: { profile.removeCondition(id: clause.id) }
+                        )
+                    }
+                    addConditionButton(toGroup: index)
+                } header: {
+                    groupHeader(index: index, count: group.count)
+                } footer: {
+                    if index == groups.count - 1 {
+                        conditionsFooter(newGroupIndex: groups.count)
+                    }
                 }
+            }
+        }
+    }
+
+    private func groupHeader(index: Int, count: Int) -> some View {
+        HStack(alignment: .firstTextBaseline, spacing: 6) {
+            Text(index == 0 ? "Match When" : "Or When")
+            if count > 1 {
+                Text("all of these are true")
+                    .font(.callout)
+                    .fontWeight(.regular)
+                    .foregroundStyle(.secondary)
+            }
+        }
+    }
+
+    private func addConditionButton(toGroup index: Int) -> some View {
+        Button {
+            conditionTarget = ConditionTarget(groupIndex: index)
+        } label: {
+            Label("Add Condition…", systemImage: "plus")
+        }
+        .buttonStyle(.borderless)
+    }
+
+    private func conditionsFooter(newGroupIndex: Int) -> some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Button {
+                conditionTarget = ConditionTarget(groupIndex: newGroupIndex)
+            } label: {
+                Label("Add “Or” Group…", systemImage: "plus")
+            }
+            .buttonStyle(.borderless)
+            .help("Also match this profile in another situation")
+
+            if needsLocationAccess {
+                LocationAccessBanner(appState: appState, message: "Wi-Fi and Place conditions can't be checked until ContextSwitch has Location access.")
+            }
+
+            Group {
                 switch profile.evaluate(appState.snapshot) {
                 case true?:
                     Label("Matches the current network", systemImage: "checkmark.circle.fill")
                         .foregroundStyle(.green)
                 case false?:
                     Label("Doesn't match the current network", systemImage: "xmark.circle")
+                        .foregroundStyle(.secondary)
                 case nil:
                     Label("Can't tell yet — waiting on Location access or a location fix", systemImage: "questionmark.circle")
                         .foregroundStyle(.orange)
                 }
             }
             .font(.caption)
-            .foregroundStyle(.secondary)
-            .textSelection(.enabled)
+            .help("Matches when \(profile.conditionSummary)")
         }
+    }
+
+    private func negationBinding(for id: ConditionClause.ID) -> Binding<Bool> {
+        Binding(
+            get: { profile.conditions.first { $0.id == id }?.isNegated ?? false },
+            set: { newValue in
+                if let index = profile.conditions.firstIndex(where: { $0.id == id }) {
+                    profile.conditions[index].isNegated = newValue
+                }
+            }
+        )
     }
 }
 
-/// One condition row: `If`/`and`/`or` ▸ `not` ▸ condition ▸ live status.
+/// `[icon] Kind   is ⌄   value   status  ⊖` — fixed-width leading columns
+/// so rows line up into a table.
 private struct ConditionRow: View {
-    @Binding var clause: ConditionClause
-    let isFirst: Bool
+    let clause: ConditionClause
+    @Binding var isNegated: Bool
     /// The clause's value on the current network; nil = can't tell.
     let status: Bool?
     let onRemove: () -> Void
 
     var body: some View {
-        HStack(spacing: 8) {
-            Group {
-                if isFirst {
-                    Text("If")
-                        .foregroundStyle(.secondary)
-                } else {
-                    Picker("Connector", selection: $clause.connector) {
-                        Text("and").tag(ConditionClause.Connector.and)
-                        Text("or").tag(ConditionClause.Connector.or)
-                    }
-                    .labelsHidden()
-                    .fixedSize()
-                }
+        HStack(spacing: 10) {
+            HStack(spacing: 6) {
+                Image(systemName: clause.condition.systemImage)
+                    .frame(width: 18)
+                Text(clause.condition.kindLabel)
+                    .lineLimit(1)
             }
-            .frame(width: 64, alignment: .leading)
+            .foregroundStyle(.secondary)
+            .frame(width: 150, alignment: .leading)
 
-            Toggle("not", isOn: $clause.isNegated)
-                .toggleStyle(.button)
-                .controlSize(.small)
-                .help("Negate this condition")
+            Menu {
+                Picker("Operator", selection: $isNegated) {
+                    Text("is").tag(false)
+                    Text("is not").tag(true)
+                }
+                .pickerStyle(.inline)
+                .labelsHidden()
+            } label: {
+                HStack(spacing: 3) {
+                    Text(isNegated ? "is not" : "is")
+                        .fontWeight(isNegated ? .semibold : .regular)
+                    Image(systemName: "chevron.down")
+                        .font(.caption2.weight(.semibold))
+                }
+                .foregroundStyle(isNegated ? AnyShapeStyle(.tint) : AnyShapeStyle(.secondary))
+                .contentShape(Rectangle())
+            }
+            .menuStyle(.button)
+            .buttonStyle(.plain)
+            .menuIndicator(.hidden)
+            .fixedSize()
+            .frame(width: 50, alignment: .leading)
+            .help("Match when this is, or isn't, the case")
 
-            Label(clause.condition.kindLabel, systemImage: clause.condition.systemImage)
-                .foregroundStyle(.secondary)
-                .lineLimit(1)
             Text(clause.condition.valueLabel)
                 .lineLimit(1)
                 .truncationMode(.middle)
-            Spacer()
+            Spacer(minLength: 8)
             statusIcon
             RemoveButton(action: onRemove)
         }
