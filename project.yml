@@ -35,7 +35,9 @@ targets:
         MARKETING_VERSION: "0.1.0"
         CURRENT_PROJECT_VERSION: "1"
         CODE_SIGN_STYLE: Automatic
-        ASSETCATALOG_COMPILER_APPICON_NAME: ""
+        # Sources/ContextSwitch/AppIcon.icon — an Icon Composer document
+        # (open it in Xcode ▸ Open Developer Tool ▸ Icon Composer to edit).
+        ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
     scheme:
       testTargets:
         - ContextSwitchTests

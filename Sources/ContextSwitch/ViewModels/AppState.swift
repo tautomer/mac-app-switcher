@@ -7,7 +7,9 @@ import CoreLocation
 final class AppState: ObservableObject {
     @Published var profiles: [Profile] = []
     @Published private(set) var activeProfile: Profile?
-    @Published var isManualOverride: Bool = false
+    /// Off = keep the current profile and ignore network changes. Turned
+    /// off by picking a profile by hand; remembered across launches.
+    @Published private(set) var isAutoSwitchEnabled: Bool = AppState.defaults.object(forKey: DefaultsKey.autoSwitch) as? Bool ?? true
     @Published private(set) var snapshot: NetworkSnapshot = .empty
     @Published var launchAtLogin: Bool = LoginItemManager.isEnabled
     @Published private(set) var locationStatus: CLAuthorizationStatus = .notDetermined
@@ -27,8 +29,26 @@ final class AppState: ObservableObject {
     /// no address, DHCP…) and we don't want to launch/quit apps for each.
     private static let settleDelay: DispatchQueue.SchedulerTimeType.Stride = .seconds(3)
 
+    private enum DefaultsKey {
+        static let autoSwitch = "autoSwitchEnabled"
+        static let lastActiveProfile = "lastActiveProfileID"
+    }
+
+    /// A separate domain when CONTEXTSWITCH_PROFILES points at a sandbox
+    /// file, so trying things out doesn't touch your real settings either.
+    private static let defaults: UserDefaults =
+        ProcessInfo.processInfo.environment["CONTEXTSWITCH_PROFILES"].flatMap { _ in
+            UserDefaults(suiteName: "com.contextswitch.sandbox")
+        } ?? .standard
+
     init() {
         profiles = store.profiles
+        // With auto-switch off, come back on the profile that was active —
+        // without launching or quitting anything.
+        if !isAutoSwitchEnabled,
+           let id = Self.defaults.string(forKey: DefaultsKey.lastActiveProfile).flatMap(UUID.init(uuidString:)) {
+            activeProfile = profiles.first { $0.id == id }
+        }
         // Synchronous on purpose: the store is only mutated from the main
         // thread, and callers (e.g. the editor selecting a just-added
         // profile, or reevaluate() after a save) need the new list at once.
@@ -122,7 +142,7 @@ final class AppState: ObservableObject {
     // MARK: - Profile selection
 
     func reevaluate() {
-        guard !isManualOverride else { return }
+        guard isAutoSwitchEnabled else { return }
         // Offline usually means mid-switch (Wi-Fi rejoining, DHCP pending).
         // Keep the current profile rather than bouncing to the fallback and
         // back, which would quit and relaunch apps for nothing.
@@ -137,17 +157,19 @@ final class AppState: ObservableObject {
     }
 
     func selectManually(_ profile: Profile) {
-        isManualOverride = true
+        setAutoSwitch(false)
         apply(profile)
     }
 
-    func resumeAutoDetection() {
-        isManualOverride = false
-        reevaluate()
+    func setAutoSwitch(_ enabled: Bool) {
+        isAutoSwitchEnabled = enabled
+        Self.defaults.set(enabled, forKey: DefaultsKey.autoSwitch)
+        if enabled { reevaluate() }
     }
 
     private func apply(_ profile: Profile) {
         activeProfile = profile
+        Self.defaults.set(profile.id.uuidString, forKey: DefaultsKey.lastActiveProfile)
         for rule in profile.appRules {
             enforce(rule.effectiveAction, for: rule)
         }

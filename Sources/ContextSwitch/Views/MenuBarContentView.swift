@@ -5,7 +5,10 @@ struct MenuBarIcon: View {
     @ObservedObject var appState: AppState
 
     var body: some View {
-        Image(systemName: "point.3.filled.connected.trianglepath.dotted")
+        // Template image (Assets.xcassets/MenuBarIcon), so the menu bar
+        // tints it for light/dark and highlighted states.
+        Image("MenuBarIcon")
+            .renderingMode(.template)
     }
 }
 
@@ -40,7 +43,7 @@ struct MenuBarContentView: View {
             VStack(alignment: .leading, spacing: 2) {
                 Text(appState.activeProfile?.name ?? "No Profile")
                     .font(.headline)
-                Text(appState.isManualOverride ? "Manually selected" : "Auto-detected")
+                Text(appState.isAutoSwitchEnabled ? "Auto-detected" : "Auto-switch off")
                     .font(.caption)
                     .foregroundStyle(.secondary)
                 Label(networkSummary, systemImage: networkSymbol)
@@ -49,12 +52,6 @@ struct MenuBarContentView: View {
                     .lineLimit(1)
             }
             Spacer()
-            if appState.isManualOverride {
-                Button("Resume Auto") {
-                    appState.resumeAutoDetection()
-                }
-                .font(.caption)
-            }
         }
         .padding(.horizontal)
         .padding(.bottom, 6)
@@ -93,23 +90,36 @@ struct MenuBarContentView: View {
         .padding(.vertical, 4)
     }
 
+    /// The two ways the active profile gets chosen: by hand, or automatically.
+    /// Picking one by hand turns auto-switch off.
     private var profilePicker: some View {
-        Menu {
-            ForEach(appState.profiles) { profile in
-                Button {
-                    appState.selectManually(profile)
-                } label: {
-                    if profile.id == appState.activeProfile?.id {
-                        Label(profile.name, systemImage: "checkmark")
-                    } else {
-                        Text(profile.name)
+        HStack {
+            Menu {
+                ForEach(appState.profiles) { profile in
+                    Button {
+                        appState.selectManually(profile)
+                    } label: {
+                        if profile.id == appState.activeProfile?.id {
+                            Label(profile.name, systemImage: "checkmark")
+                        } else {
+                            Text(profile.name)
+                        }
                     }
                 }
+            } label: {
+                Label("Switch Profile", systemImage: "arrow.triangle.2.circlepath")
             }
-        } label: {
-            Label("Switch Profile", systemImage: "arrow.triangle.2.circlepath")
+            .menuStyle(.borderlessButton)
+            .fixedSize()
+            Spacer()
+            Toggle("Auto-switch", isOn: Binding(
+                get: { appState.isAutoSwitchEnabled },
+                set: { appState.setAutoSwitch($0) }
+            ))
+            .toggleStyle(.switch)
+            .controlSize(.small)
+            .help("Switch profiles automatically when the network changes")
         }
-        .menuStyle(.borderlessButton)
         .padding(.horizontal)
         .padding(.vertical, 6)
     }

@@ -32,6 +32,13 @@ struct ContextSwitchApp: App {
             DebugCommands()
             #endif
         }
+
+        #if DEBUG
+        Window("Menu Preview", id: DebugSnapshot.menuPreviewID) {
+            MenuBarContentView(appState: appState)
+        }
+        .windowResizability(.contentSize)
+        #endif
     }
 }
 

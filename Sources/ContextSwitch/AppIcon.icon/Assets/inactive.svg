@@ -1,0 +1,7 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 1024 1024">
+  <!-- The branch not taken, ending in an empty ring the same size as the
+       disc. The branch stops at the ring's edge so its rounded end doesn't
+       poke into the hole. -->
+  <path d="M512 553 C512 434 315 434 315 360" fill="none" stroke="#FFFFFF" stroke-width="75" stroke-linecap="round"/>
+  <circle cx="315" cy="277" r="61" fill="none" stroke="#FFFFFF" stroke-width="34"/>
+</svg>

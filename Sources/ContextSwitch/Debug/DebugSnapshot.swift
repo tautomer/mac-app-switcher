@@ -16,9 +16,10 @@ enum DebugSnapshot {
         do {
             try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
             let content = try await SCShareableContent.currentProcess
-            // Layer 0 = normal windows and sheets (skips menu bar/wallpaper).
-            // Not filtered on isOnScreen: windows on another Space (e.g.
-            // while a full-screen app is frontmost) can still be captured.
+            // Layer 0 = normal windows and sheets (skips menu bar/wallpaper —
+            // the status item itself is drawn by the system, not by us). Not
+            // filtered on isOnScreen: windows on another Space (e.g. while a
+            // full-screen app is in front) can still be captured.
             for window in content.windows where window.windowLayer == 0 && window.frame.width > 120 && window.frame.height > 120 {
                 let config = SCStreamConfiguration()
                 config.width = Int(window.frame.width * 2)
@@ -45,7 +46,22 @@ struct DebugCommands: Commands {
             Button("Capture Windows") {
                 Task { await DebugSnapshot.captureAll() }
             }
+            MenuPreviewButton()
         }
     }
+}
+
+/// The popover's content in an ordinary window: the real popover only
+/// opens from a click on the status item, so it can't be captured directly.
+private struct MenuPreviewButton: View {
+    @Environment(\.openWindow) private var openWindow
+
+    var body: some View {
+        Button("Show Menu Preview") { openWindow(id: DebugSnapshot.menuPreviewID) }
+    }
+}
+
+extension DebugSnapshot {
+    static let menuPreviewID = "debug-menu-preview"
 }
 #endif
