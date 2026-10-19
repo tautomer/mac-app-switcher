@@ -72,6 +72,72 @@ private let dock = NetworkConnection(
     }
 }
 
+@Suite struct DeviceConditionTests {
+    let dockEntry = USBDevice(name: "40AY", manufacturer: "Lenovo", vendorID: 6127, productID: 12457, serialNumber: "1S40AY0090USZVV1ESKM")
+    let monitor = ConnectedDisplay(name: "LG ULTRAWIDE", vendorID: 7789, modelID: 30625, serialNumber: 180875)
+
+    @Test func usbDeviceMatchesTheRecordedUnitOrAnyOfTheModel() {
+        let snapshot = NetworkSnapshot(usbDevices: [dockEntry])
+        #expect(NetworkCondition.usbDevice(name: "40AY", vendorID: 6127, productID: 12457, serialNumber: "1S40AY0090USZVV1ESKM").isSatisfied(by: snapshot))
+        #expect(NetworkCondition.usbDevice(name: "40AY", vendorID: 6127, productID: 12457, serialNumber: nil).isSatisfied(by: snapshot))
+        // The same model of dock, at another desk.
+        #expect(!NetworkCondition.usbDevice(name: "40AY", vendorID: 6127, productID: 12457, serialNumber: "1S40AY0090USOTHER").isSatisfied(by: snapshot))
+        #expect(!NetworkCondition.usbDevice(name: "40AY", vendorID: 6127, productID: 12464, serialNumber: nil).isSatisfied(by: snapshot))
+    }
+
+    @Test func displayMatchesTheRecordedUnitOrAnyOfTheModel() {
+        let snapshot = NetworkSnapshot(displays: [monitor])
+        #expect(NetworkCondition.display(name: "LG ULTRAWIDE", vendorID: 7789, modelID: 30625, serialNumber: 180875).isSatisfied(by: snapshot))
+        #expect(NetworkCondition.display(name: "LG ULTRAWIDE", vendorID: 7789, modelID: 30625, serialNumber: nil).isSatisfied(by: snapshot))
+        #expect(!NetworkCondition.display(name: "LG ULTRAWIDE", vendorID: 7789, modelID: 30625, serialNumber: 1).isSatisfied(by: snapshot))
+        #expect(!NetworkCondition.display(name: "LG ULTRAWIDE", vendorID: 7789, modelID: 30625, serialNumber: nil).isSatisfied(by: .empty))
+    }
+
+    @Test func unpluggedIsKnownSoNotMatches() {
+        let undocked = Profile(name: "Undocked", conditions: [
+            ConditionClause(.usbDevice(name: "40AY", vendorID: 6127, productID: 12457, serialNumber: nil), isNegated: true),
+        ])
+        #expect(undocked.evaluate(.empty) == true)
+        #expect(undocked.evaluate(NetworkSnapshot(usbDevices: [dockEntry])) == false)
+    }
+
+    @Test func devicesCombineWithNetworkConditions() {
+        // At the office desk: on the office LAN and the big monitor attached.
+        let desk = Profile(name: "Desk", conditions: [
+            ConditionClause(.ethernetAdapter("USB 10/100/1000 LAN")),
+            ConditionClause(.display(name: "LG ULTRAWIDE", vendorID: 7789, modelID: 30625, serialNumber: 180875)),
+        ])
+        #expect(desk.matches(NetworkSnapshot(connections: [dock], displays: [monitor])))
+        #expect(!desk.matches(NetworkSnapshot(connections: [dock])))
+        #expect(desk.conditionSummary == "Ethernet Adapter “USB 10/100/1000 LAN” and Display “LG ULTRAWIDE”")
+    }
+}
+
+@Suite struct AppFoldersTests {
+    @Test func storesFoldersWithTildeAndNoTrailingSlash() {
+        let home = FileManager.default.homeDirectoryForCurrentUser.path
+        #expect(AppFolders.normalize(" ~/Applications/ ") == "~/Applications")
+        #expect(AppFolders.normalize("\(home)/Applications") == "~/Applications")
+        #expect(AppFolders.normalize("/opt/bin/") == "/opt/bin")
+        #expect(AppFolders.normalize("/opt/../usr/local/bin") == "/usr/local/bin")
+    }
+
+    @Test func applicationsBringsAppleAppsAlong() {
+        let roots = AppFolders.scanRoots(["/Applications", "~/bin", "/Applications/"]).map(\.path)
+        let home = FileManager.default.homeDirectoryForCurrentUser.path
+        #expect(roots == ["/Applications", "/System/Applications", "\(home)/bin"])
+    }
+
+    @Test func acceptsOnlyFullPathsToFolders() {
+        #expect(AppFolders.isFolder("/System"))
+        #expect(AppFolders.isFolder(" ~ "))
+        #expect(!AppFolders.isFolder(""))
+        #expect(!AppFolders.isFolder("System"))           // relative
+        #expect(!AppFolders.isFolder("/bin/sh"))          // a file
+        #expect(!AppFolders.isFolder("/no/such/folder"))
+    }
+}
+
 @Suite struct ProfileMatcherTests {
     let fallback = Profile(name: "Default")
     let home = Profile(name: "Home", conditions: [ConditionClause(.ssid("Home-WiFi"))], priority: 1)
@@ -216,6 +282,9 @@ private let dock = NetworkConnection(
                 ConditionClause(.wiredNetwork(name: "Office LAN", routerMAC: "00:1a:2b:3c:4d:5e")),
                 ConditionClause(.ethernetAdapter("USB 10/100/1000 LAN"), isNegated: true),
                 ConditionClause(.dnsDomain("corp.example.com"), connector: .or),
+                ConditionClause(.usbDevice(name: "40AY", vendorID: 6127, productID: 12457, serialNumber: "1S40AY0090USZVV1ESKM")),
+                ConditionClause(.usbDevice(name: "USB Receiver", vendorID: 1133, productID: 50475, serialNumber: nil)),
+                ConditionClause(.display(name: "LG ULTRAWIDE", vendorID: 7789, modelID: 30625, serialNumber: nil), isNegated: true),
             ],
             appRules: [AppRule(bundleIdentifier: nil, path: "/usr/local/bin/sync-notes", displayName: "sync-notes", action: .launch)]
         )

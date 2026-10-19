@@ -4,18 +4,21 @@ import UniformTypeIdentifiers
 
 struct AppPickerView: View {
     @Environment(\.dismiss) private var dismiss
+    @Environment(\.openWindow) private var openWindow
     @State private var searchText = ""
-    @State private var apps: [(bundleIdentifier: String, name: String, url: URL)] = []
+    @State private var items: [InstalledItem] = []
     @State private var showingFileImporter = false
     @State private var importError: String?
 
+    /// Where to look (see `AppFolders`).
+    let folders: [String]
     /// `AppRule.targetKey`s already in the profile, shown as added.
     let existingKeys: Set<String>
     var onPick: (AppRule) -> Void
 
-    private var filtered: [(bundleIdentifier: String, name: String, url: URL)] {
-        guard !searchText.isEmpty else { return apps }
-        return apps.filter { $0.name.localizedCaseInsensitiveContains(searchText) }
+    private var filtered: [InstalledItem] {
+        guard !searchText.isEmpty else { return items }
+        return items.filter { $0.name.localizedCaseInsensitiveContains(searchText) }
     }
 
     var body: some View {
@@ -24,32 +27,25 @@ struct AppPickerView: View {
                 .textFieldStyle(.roundedBorder)
                 .padding()
 
-            List(filtered, id: \.bundleIdentifier) { app in
-                let added = existingKeys.contains(app.bundleIdentifier)
-                Button {
-                    pick(app.url)
-                } label: {
-                    HStack {
-                        Image(nsImage: NSWorkspace.shared.icon(forFile: app.url.path))
-                            .resizable()
-                            .frame(width: 20, height: 20)
-                        Text(app.name)
-                        Spacer()
-                        if added {
-                            Image(systemName: "checkmark")
-                                .foregroundStyle(.secondary)
-                        }
+            List {
+                let apps = filtered.filter { !$0.isExecutable }
+                let tools = filtered.filter(\.isExecutable)
+                if tools.isEmpty {
+                    rows(apps)
+                } else {
+                    if !apps.isEmpty {
+                        Section("Apps") { rows(apps) }
                     }
-                    .contentShape(Rectangle())
+                    Section("Scripts & Tools") { rows(tools) }
                 }
-                .buttonStyle(.plain)
-                .disabled(added)
             }
 
             Divider()
             HStack {
                 Button("Choose…") { showingFileImporter = true }
                     .help("Pick any app or executable (script, command-line tool)")
+                Button("Folders…") { openWindow(id: "settings") }
+                    .help("Change the folders listed here: \(folders.joined(separator: ", "))")
                 Spacer()
                 Button("Cancel") { dismiss() }
                     .keyboardShortcut(.cancelAction)
@@ -57,8 +53,8 @@ struct AppPickerView: View {
             .padding()
         }
         .frame(width: 380, height: 460)
-        .onAppear {
-            apps = AppLauncherService.shared.installedApplications()
+        .task(id: folders) {
+            items = AppLauncherService.shared.installedItems(inFolders: folders)
         }
         .fileImporter(
             isPresented: $showingFileImporter,
@@ -73,6 +69,39 @@ struct AppPickerView: View {
             Button("OK", role: .cancel) {}
         } message: {
             Text(importError ?? "")
+        }
+    }
+
+    private func rows(_ items: [InstalledItem]) -> some View {
+        ForEach(items) { item in
+            let added = existingKeys.contains(item.targetKey)
+            Button {
+                pick(item.url)
+            } label: {
+                HStack {
+                    Image(nsImage: NSWorkspace.shared.icon(forFile: item.url.path))
+                        .resizable()
+                        .frame(width: 20, height: 20)
+                    VStack(alignment: .leading, spacing: 1) {
+                        Text(item.name)
+                        if item.isExecutable {
+                            Text(item.url.deletingLastPathComponent().path)
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                                .lineLimit(1)
+                                .truncationMode(.middle)
+                        }
+                    }
+                    Spacer()
+                    if added {
+                        Image(systemName: "checkmark")
+                            .foregroundStyle(.secondary)
+                    }
+                }
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .disabled(added)
         }
     }
 

@@ -11,7 +11,7 @@ enum RemoteCommand {
 
     struct Request {
         let id: String
-        /// nil = switch to the profile that matches the current network.
+        /// nil = switch to the profile that matches right now.
         let profileName: String?
         /// The profiles file the sender uses; an app using a different one
         /// (e.g. a CONTEXTSWITCH_PROFILES sandbox) ignores the request.

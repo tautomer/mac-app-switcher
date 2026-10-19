@@ -118,7 +118,7 @@ struct MenuBarContentView: View {
             ))
             .toggleStyle(.switch)
             .controlSize(.small)
-            .help("Switch profiles automatically when the network changes")
+            .help("Switch profiles automatically when the network or connected devices change")
         }
         .padding(.horizontal)
         .padding(.vertical, 6)

@@ -12,6 +12,17 @@ enum EnforceOutcome: Equatable {
     case ignored
 }
 
+/// An app or executable found in the app folders, for the "add app" picker.
+struct InstalledItem: Identifiable {
+    let url: URL
+    let name: String
+    /// The `AppRule.targetKey` of the rule it'd be added as.
+    let targetKey: String
+    let isExecutable: Bool
+
+    var id: String { targetKey }
+}
+
 /// Launches/quits the targets of `AppRule`s: app bundles through
 /// NSWorkspace, plain executables (scripts, CLI tools) through Process.
 @MainActor
@@ -124,18 +135,14 @@ final class AppLauncherService {
         return AppRule(bundleIdentifier: nil, path: url.path, displayName: url.lastPathComponent, action: .launch)
     }
 
-    /// Scans the standard application folders (one level of subfolders,
-    /// e.g. Utilities) for the "add app" picker.
-    func installedApplications() -> [(bundleIdentifier: String, name: String, url: URL)] {
+    /// Scans `folders` (see `AppFolders`) for the "add app" picker: apps
+    /// there or one subfolder down (e.g. Utilities), and scripts and
+    /// command-line tools directly inside, as in a folder on $PATH.
+    func installedItems(inFolders folders: [String]) -> [InstalledItem] {
         let fm = FileManager.default
-        let roots = [
-            URL(fileURLWithPath: "/Applications"),
-            URL(fileURLWithPath: "/System/Applications"),
-            fm.homeDirectoryForCurrentUser.appendingPathComponent("Applications"),
-        ]
         var seen = Set<String>()
-        var results: [(String, String, URL)] = []
-        for root in roots {
+        var results: [InstalledItem] = []
+        for root in AppFolders.scanRoots(folders) {
             guard let enumerator = fm.enumerator(at: root, includingPropertiesForKeys: nil,
                                                  options: [.skipsPackageDescendants, .skipsHiddenFiles]) else { continue }
             for case let item as URL in enumerator {
@@ -143,15 +150,14 @@ final class AppLauncherService {
                     enumerator.skipDescendants()
                     continue
                 }
-                guard item.pathExtension == "app",
-                      let bid = Bundle(url: item)?.bundleIdentifier,
-                      seen.insert(bid).inserted
-                else { continue }
-                let name = fm.displayName(atPath: item.path).replacingOccurrences(of: ".app", with: "")
-                results.append((bid, name, item))
+                // Apps without a bundle identifier can still be added with "Choose…".
+                let wanted = item.pathExtension == "app" ? Bundle(url: item)?.bundleIdentifier != nil : enumerator.level == 1
+                guard wanted, let rule = rule(forFileAt: item), seen.insert(rule.targetKey).inserted else { continue }
+                results.append(InstalledItem(url: item, name: rule.displayName, targetKey: rule.targetKey,
+                                             isExecutable: rule.isExecutable))
             }
         }
-        return results.sorted { $0.1.localizedCaseInsensitiveCompare($1.1) == .orderedAscending }
+        return results.sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
     }
 
     private func runningApplications(for rule: AppRule) -> [NSRunningApplication] {

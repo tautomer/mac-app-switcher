@@ -12,6 +12,8 @@ final class AppState: ObservableObject {
     @Published private(set) var isAutoSwitchEnabled: Bool = AppState.defaults.object(forKey: DefaultsKey.autoSwitch) as? Bool ?? true
     @Published private(set) var snapshot: NetworkSnapshot = .empty
     @Published var launchAtLogin: Bool = LoginItemManager.isEnabled
+    /// Where "Add App…" looks (see `AppFolders`).
+    @Published private(set) var appFolders: [String] = AppState.defaults.stringArray(forKey: DefaultsKey.appFolders) ?? AppFolders.defaults
     @Published private(set) var locationStatus: CLAuthorizationStatus = .notDetermined
     /// Bumped whenever an app or executable starts/stops, so views showing
     /// running state re-render.
@@ -32,6 +34,7 @@ final class AppState: ObservableObject {
     private enum DefaultsKey {
         static let autoSwitch = "autoSwitchEnabled"
         static let lastActiveProfile = "lastActiveProfileID"
+        static let appFolders = "appFolders"
     }
 
     /// A separate domain when CONTEXTSWITCH_PROFILES points at a sandbox
@@ -268,5 +271,17 @@ final class AppState: ObservableObject {
     func setLaunchAtLogin(_ enabled: Bool) {
         launchAtLogin = enabled
         LoginItemManager.setEnabled(enabled)
+    }
+
+    func addAppFolder(_ path: String) {
+        let folder = AppFolders.normalize(path)
+        guard !appFolders.contains(folder) else { return }
+        appFolders.append(folder)
+        Self.defaults.set(appFolders, forKey: DefaultsKey.appFolders)
+    }
+
+    func removeAppFolder(_ folder: String) {
+        appFolders.removeAll { $0 == folder }
+        Self.defaults.set(appFolders, forKey: DefaultsKey.appFolders)
     }
 }

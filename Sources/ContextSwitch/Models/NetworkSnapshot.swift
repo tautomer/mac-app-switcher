@@ -1,7 +1,8 @@
 import Foundation
 
-/// A point-in-time read of "where are we, network-wise". Produced by
-/// NetworkMonitor + LocationMonitor and fed to ProfileMatcher.
+/// A point-in-time read of "where are we": the network, the attached
+/// devices and the location. Produced by NetworkMonitor + LocationMonitor
+/// and fed to ProfileMatcher.
 struct NetworkSnapshot: Equatable {
     /// One entry per network service that currently has an IPv4 address,
     /// primary connection first. Wi-Fi and Ethernet can both be up at once
@@ -11,6 +12,10 @@ struct NetworkSnapshot: Equatable {
     /// add these as well as the physical network.
     var dnsDomains: [String] = []
     var location: SimpleLocation?
+    /// Sorted, one entry per distinct device; hubs are left out.
+    var usbDevices: [USBDevice] = []
+    /// External displays, sorted.
+    var displays: [ConnectedDisplay] = []
 
     static let empty = NetworkSnapshot()
 

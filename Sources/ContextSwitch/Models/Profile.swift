@@ -89,7 +89,7 @@ extension Array where Element == Profile {
 extension NetworkCondition {
     /// nil when it can't be told yet: a Wi-Fi name macOS is hiding (no
     /// Location access) or no location fix. Everything else is read
-    /// directly from the network state, so it's always known.
+    /// directly from the system, so it's always known.
     func evaluate(_ snapshot: NetworkSnapshot) -> Bool? {
         let connections = snapshot.connections
         switch self {
@@ -115,6 +115,14 @@ extension NetworkCondition {
         case .location(_, let lat, let lon, let radius):
             guard let here = snapshot.location else { return nil }
             return here.distanceMeters(toLatitude: lat, longitude: lon) <= radius
+        case .usbDevice(_, let vendorID, let productID, let serial):
+            return snapshot.usbDevices.contains {
+                $0.vendorID == vendorID && $0.productID == productID && (serial == nil || $0.serialNumber == serial)
+            }
+        case .display(_, let vendorID, let modelID, let serial):
+            return snapshot.displays.contains {
+                $0.vendorID == vendorID && $0.modelID == modelID && (serial == nil || $0.serialNumber == serial)
+            }
         }
     }
 

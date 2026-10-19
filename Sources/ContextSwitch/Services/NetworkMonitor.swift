@@ -2,23 +2,31 @@ import Foundation
 import Network
 import SystemConfiguration
 import CoreWLAN
+import CoreGraphics
+import IOKit
 import Combine
 
 /// Watches for network changes (interface up/down, Wi-Fi join/leave, IP
-/// changes) and publishes a fresh `NetworkSnapshot` whenever something
-/// moves. Uses SystemConfiguration for addresses/routers/DNS (no permission
-/// required) and CoreWLAN for SSID (requires Location permission, nil
-/// otherwise). Marked @unchecked Sendable because callbacks arrive on
-/// background queues, but snapshots are built on `monitorQueue` and every
-/// mutation of `snapshot` happens on the main queue.
+/// changes) and USB devices or displays coming and going, and publishes a
+/// fresh `NetworkSnapshot` whenever something moves. Uses
+/// SystemConfiguration for addresses/routers/DNS (no permission required),
+/// CoreWLAN for SSID (requires Location permission, nil otherwise) and
+/// IOKit/CoreGraphics for devices. Marked @unchecked Sendable because
+/// callbacks arrive on background queues, but snapshots are built on
+/// `monitorQueue` and every mutation of `snapshot` happens on the main
+/// queue.
 final class NetworkMonitor: ObservableObject, @unchecked Sendable {
     @Published private(set) var snapshot: NetworkSnapshot = .empty
 
     private var pathMonitor: NWPathMonitor?
     private let monitorQueue = DispatchQueue(label: "ContextSwitch.NetworkMonitor")
     private var dynamicStore: SCDynamicStore?
+    private var usbNotifications: IONotificationPortRef?
+    private var usbIterators: [io_iterator_t] = []
 
     func start() {
+        watchDevices()
+
         let path = NWPathMonitor()
         path.pathUpdateHandler = { [weak self] _ in
             self?.refresh()
@@ -56,14 +64,47 @@ final class NetworkMonitor: ObservableObject, @unchecked Sendable {
         refresh()
     }
 
+    private func watchDevices() {
+        let info = Unmanaged.passUnretained(self).toOpaque()
+        if let port = IONotificationPortCreate(kIOMainPortDefault) {
+            IONotificationPortSetDispatchQueue(port, monitorQueue)
+            let callback: IOServiceMatchingCallback = { info, iterator in
+                NetworkMonitor.drain(iterator)
+                guard let info else { return }
+                Unmanaged<NetworkMonitor>.fromOpaque(info).takeUnretainedValue().refresh()
+            }
+            for notification in [kIOFirstMatchNotification, kIOTerminatedNotification] {
+                var iterator: io_iterator_t = 0
+                guard IOServiceAddMatchingNotification(port, notification, IOServiceMatching(DeviceInventory.usbDeviceClass),
+                                                       callback, info, &iterator) == KERN_SUCCESS
+                else { continue }
+                NetworkMonitor.drain(iterator)
+                usbIterators.append(iterator)
+            }
+            usbNotifications = port
+        }
+        CGDisplayRegisterReconfigurationCallback({ _, flags, info in
+            guard !flags.contains(.beginConfigurationFlag), let info else { return }
+            Unmanaged<NetworkMonitor>.fromOpaque(info).takeUnretainedValue().refresh()
+        }, info)
+    }
+
+    /// IOKit only notifies again once the iterator has been read to the end.
+    private static func drain(_ iterator: io_iterator_t) {
+        while case let service = IOIteratorNext(iterator), service != 0 {
+            IOObjectRelease(service)
+        }
+    }
+
     /// Rebuilds the snapshot off the main thread (SystemConfiguration and
     /// CoreWLAN reads can block), then publishes it on main.
     func refresh() {
         monitorQueue.async { [weak self] in
-            let snap = NetworkMonitor.buildSnapshot()
+            let snap = NetworkMonitor.readNetworkAndUSB()
             DispatchQueue.main.async {
                 guard let self else { return }
                 var next = snap
+                next.displays = DeviceInventory.displays()
                 next.location = self.snapshot.location
                 if next != self.snapshot {
                     self.snapshot = next
@@ -85,10 +126,20 @@ final class NetworkMonitor: ObservableObject, @unchecked Sendable {
         }
     }
 
-    /// A one-off, synchronous read of the current network (used directly by
-    /// the command line; the app goes through `refresh()`). No location.
+    /// A one-off, synchronous read of the current network and devices (used
+    /// directly by the command line; the app goes through `refresh()`). No
+    /// location.
+    @MainActor
     static func buildSnapshot() -> NetworkSnapshot {
+        var snap = readNetworkAndUSB()
+        snap.displays = DeviceInventory.displays()
+        return snap
+    }
+
+    /// Everything but displays (read on main) and location.
+    private static func readNetworkAndUSB() -> NetworkSnapshot {
         var snap = NetworkSnapshot()
+        snap.usbDevices = DeviceInventory.usbDevices()
         guard let store = SCDynamicStoreCreate(nil, "ContextSwitch.read" as CFString, nil, nil) else {
             return snap
         }

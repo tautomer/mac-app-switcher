@@ -5,7 +5,7 @@ import Foundation
 /// the app with no arguments, and Xcode adds AppKit ones (`-NSFoo value`),
 /// so anything else starts the menu bar app.
 enum CommandLineCommand: Equatable {
-    /// One switch to the profile that matches the current network.
+    /// One switch to the profile that matches right now.
     case autoSwitch(dryRun: Bool)
     /// One switch to the named profile.
     case switchTo(profile: String, dryRun: Bool)
@@ -18,10 +18,10 @@ enum CommandLineCommand: Equatable {
                ContextSwitch --profile NAME [--dry-run]
                ContextSwitch --list
 
-          --switch        Switch once to the profile that matches the current network.
+          --switch        Switch once to the profile that matches right now.
           --profile NAME  Switch once to the named profile (auto-switch stays as it is).
           --dry-run       Show what would be launched or quit, without doing it.
-          --list          List profiles and whether each matches the current network.
+          --list          List profiles and whether each matches right now.
 
         Without these options ContextSwitch starts as a menu bar app. If it's already
         running, --switch and --profile are carried out by it.

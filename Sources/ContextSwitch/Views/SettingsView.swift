@@ -2,6 +2,8 @@ import SwiftUI
 
 struct SettingsView: View {
     @ObservedObject var appState: AppState
+    @State private var newFolder = ""
+    @State private var showingFolderImporter = false
 
     var body: some View {
         Form {
@@ -11,6 +13,8 @@ struct SettingsView: View {
                     set: { appState.setLaunchAtLogin($0) }
                 ))
             }
+
+            appFolders
 
             Section {
                 LabeledContent("Status", value: locationStatusText)
@@ -38,6 +42,11 @@ struct SettingsView: View {
             }
         }
         .formStyle(.grouped)
+        .fileImporter(isPresented: $showingFolderImporter, allowedContentTypes: [.folder], allowsMultipleSelection: true) { result in
+            if case .success(let urls) = result {
+                urls.forEach { appState.addAppFolder($0.path) }
+            }
+        }
         // A grouped Form is a scroll view that will happily fill the whole
         // screen; size the window to the content instead.
         .scrollDisabled(true)
@@ -45,6 +54,46 @@ struct SettingsView: View {
         .frame(width: 460)
         .keepsAppActiveWhileOpen()
         .onAppear { appState.refreshNetwork() }
+    }
+
+    private var appFolders: some View {
+        Section {
+            ForEach(appState.appFolders, id: \.self) { folder in
+                HStack {
+                    Image(nsImage: NSWorkspace.shared.icon(forFile: AppFolders.url(for: folder).path))
+                        .resizable()
+                        .frame(width: 16, height: 16)
+                    Text(folder)
+                    if !AppFolders.isFolder(folder) {
+                        Text("Not found")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                    Spacer()
+                    RemoveButton { appState.removeAppFolder(folder) }
+                }
+            }
+            HStack {
+                TextField("Folder", text: $newFolder, prompt: Text("e.g. ~/Applications or /opt/bin"))
+                    .labelsHidden()
+                    .onSubmit(addTypedFolder)
+                Button("Add", action: addTypedFolder)
+                    .disabled(!AppFolders.isFolder(newFolder))
+                Button("Choose…") { showingFolderImporter = true }
+            }
+        } header: {
+            Text("App Folders")
+        } footer: {
+            Text("“Add App…” lists the apps in these folders and their subfolders, and the scripts and command-line tools directly inside. /Applications includes Apple's built-in apps.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+        }
+    }
+
+    private func addTypedFolder() {
+        guard AppFolders.isFolder(newFolder) else { return }
+        appState.addAppFolder(newFolder)
+        newFolder = ""
     }
 
     private var locationStatusText: String {

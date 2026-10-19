@@ -148,7 +148,7 @@ enum CommandLineInterface {
     static func report(profile: Profile, outcomes: [(AppRule, EnforceOutcome)], reason: SwitchReason, dryRun: Bool) -> String {
         let because: String
         switch reason {
-        case .matched: because = " — it matches the current network"
+        case .matched: because = " — its conditions match"
         case .fallback: because = " — the fallback, as no other profile matches"
         case .named: because = ""
         }
@@ -173,7 +173,7 @@ enum CommandLineInterface {
     }
 
     static func noMatchMessage(snapshot: NetworkSnapshot, profiles: [Profile]) -> String {
-        var message = "No profile matches the current network, and there's no fallback profile."
+        var message = "No profile matches right now, and there's no fallback profile."
         if profiles.contains(where: { $0.evaluate(snapshot) == nil }) {
             message += "\nSome conditions couldn't be checked — \(unknownExplanation)"
         }

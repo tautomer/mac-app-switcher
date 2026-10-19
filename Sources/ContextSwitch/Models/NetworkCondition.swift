@@ -1,8 +1,8 @@
 import Foundation
 
-/// A single signal a profile can match against. A profile matches when ALL
-/// of its conditions are satisfied (logical AND) against the current
-/// `NetworkSnapshot` / location state.
+/// A single signal a profile can match against — something about the
+/// network, the location or the attached devices, as read into a
+/// `NetworkSnapshot`.
 enum NetworkCondition: Codable, Hashable, Identifiable {
     case ssid(String)
     /// A specific wired network. macOS names Ethernet adapters, not the
@@ -17,6 +17,13 @@ enum NetworkCondition: Codable, Hashable, Identifiable {
     case gatewayMAC(String)
     case subnet(cidr: String)
     case location(name: String, latitude: Double, longitude: Double, radiusMeters: Double)
+    /// Plugged in directly or through a hub or dock. With a serial number
+    /// it's that one unit — your office keyboard, not the same model at
+    /// home; without, any of the model.
+    case usbDevice(name: String, vendorID: Int, productID: Int, serialNumber: String?)
+    /// An external display, by the model (and serial number, if recorded)
+    /// in its EDID.
+    case display(name: String, vendorID: Int, modelID: Int, serialNumber: Int?)
 
     var id: String {
         switch self {
@@ -28,6 +35,8 @@ enum NetworkCondition: Codable, Hashable, Identifiable {
         case .gatewayMAC(let v): return "gatewayMAC:\(MACAddress.normalize(v))"
         case .subnet(let v): return "subnet:\(v)"
         case .location(let name, let lat, let lon, let r): return "location:\(name):\(lat):\(lon):\(r)"
+        case .usbDevice(_, let vendor, let product, let serial): return "usbDevice:\(vendor):\(product):\(serial ?? "*")"
+        case .display(_, let vendor, let model, let serial): return "display:\(vendor):\(model):\(serial.map(String.init) ?? "*")"
         }
     }
 
@@ -41,6 +50,8 @@ enum NetworkCondition: Codable, Hashable, Identifiable {
         case .gatewayMAC: return "Router MAC"
         case .subnet: return "Subnet"
         case .location: return "Place"
+        case .usbDevice: return "USB Device"
+        case .display: return "Display"
         }
     }
 
@@ -54,6 +65,8 @@ enum NetworkCondition: Codable, Hashable, Identifiable {
         case .gatewayMAC(let v): return MACAddress.normalize(v)
         case .subnet(let v): return v
         case .location(let name, _, _, let radius): return "\(name) (±\(Int(radius))m)"
+        case .usbDevice(let name, _, _, _): return name
+        case .display(let name, _, _, _): return name
         }
     }
 
@@ -64,6 +77,8 @@ enum NetworkCondition: Codable, Hashable, Identifiable {
         case .dnsDomain: return "globe"
         case .gatewayIP, .gatewayMAC, .subnet: return "point.3.connected.trianglepath.dotted"
         case .location: return "mappin.and.ellipse"
+        case .usbDevice: return "cable.connector"
+        case .display: return "display"
         }
     }
 
@@ -72,7 +87,8 @@ enum NetworkCondition: Codable, Hashable, Identifiable {
     var requiresLocationPermission: Bool {
         switch self {
         case .ssid, .location: return true
-        case .wiredNetwork, .ethernetAdapter, .dnsDomain, .gatewayIP, .gatewayMAC, .subnet: return false
+        case .wiredNetwork, .ethernetAdapter, .dnsDomain, .gatewayIP, .gatewayMAC, .subnet, .usbDevice, .display:
+            return false
         }
     }
 }

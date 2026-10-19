@@ -184,7 +184,7 @@ private struct ProfileDetailEditor: View {
         }
         .formStyle(.grouped)
         .sheet(isPresented: $showingAppPicker) {
-            AppPickerView(existingKeys: Set(profile.appRules.map(\.targetKey))) { rule in
+            AppPickerView(folders: appState.appFolders, existingKeys: Set(profile.appRules.map(\.targetKey))) { rule in
                 profile.appRules.append(rule)
             }
         }
@@ -271,10 +271,10 @@ private struct ProfileDetailEditor: View {
             Group {
                 switch profile.evaluate(appState.snapshot) {
                 case true?:
-                    Label("Matches the current network", systemImage: "checkmark.circle.fill")
+                    Label("Matches right now", systemImage: "checkmark.circle.fill")
                         .foregroundStyle(.green)
                 case false?:
-                    Label("Doesn't match the current network", systemImage: "xmark.circle")
+                    Label("Doesn't match right now", systemImage: "xmark.circle")
                         .foregroundStyle(.secondary)
                 case nil:
                     Label("Can't tell yet — waiting on Location access or a location fix", systemImage: "questionmark.circle")
@@ -303,7 +303,7 @@ private struct ProfileDetailEditor: View {
 private struct ConditionRow: View {
     let clause: ConditionClause
     @Binding var isNegated: Bool
-    /// The clause's value on the current network; nil = can't tell.
+    /// The clause's value right now; nil = can't tell.
     let status: Bool?
     let onRemove: () -> Void
 
@@ -357,11 +357,11 @@ private struct ConditionRow: View {
         case true?:
             Image(systemName: "checkmark.circle.fill")
                 .foregroundStyle(.green)
-                .help("True on the current network")
+                .help("True right now")
         case false?:
             Image(systemName: "xmark.circle")
                 .foregroundStyle(.secondary)
-                .help("False on the current network")
+                .help("False right now")
         case nil:
             Image(systemName: "questionmark.circle")
                 .foregroundStyle(.orange)
@@ -370,7 +370,7 @@ private struct ConditionRow: View {
     }
 }
 
-private struct RemoveButton: View {
+struct RemoveButton: View {
     let action: () -> Void
 
     var body: some View {
