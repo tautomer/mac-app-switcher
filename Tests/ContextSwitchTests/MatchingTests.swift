@@ -256,6 +256,42 @@ private let dock = NetworkConnection(
     }
 }
 
+@Suite struct ShellWordsTests {
+    let openRGB = URL(fileURLWithPath: "/Users/me/Applications/OpenRGB.app/Contents/MacOS/OpenRGB")
+    let expected = ["--server", "--server-host", "127.0.0.1", "--server-port", "6742", "--profile", "Everyday - Midnight Teal"]
+
+    @Test func takesAPastedCommandWithLineBreaks() {
+        let pasted = #"""
+            /Users/me/Applications/OpenRGB.app/Contents/MacOS/OpenRGB \
+              --server \
+              --server-host 127.0.0.1 \
+              --server-port 6742 \
+              --profile "Everyday - Midnight Teal"
+            """#
+        #expect(ShellWords.arguments(fromCommandLine: pasted, program: openRGB) == expected)
+    }
+
+    @Test func takesJustTheArguments() {
+        let pasted = "--server --server-host 127.0.0.1 --server-port 6742 --profile 'Everyday - Midnight Teal'"
+        #expect(ShellWords.arguments(fromCommandLine: pasted, program: openRGB) == expected)
+        // The program by name, and with Windows line endings.
+        #expect(ShellWords.arguments(fromCommandLine: "OpenRGB \\\r\n--server", program: openRGB) == ["--server"])
+    }
+
+    @Test func quotingRules() {
+        #expect(ShellWords.split(#"--name="Bob's PC" a\ b '' "x\"y" 'c\d'"#) == ["--name=Bob's PC", "a b", "", "x\"y", "c\\d"])
+        #expect(ShellWords.split("“smart quotes” ‘too’") == ["smart quotes", "too"])
+        #expect(ShellWords.split("  ") == [])
+        #expect(ShellWords.split(#"--profile "Everyday"#) == nil)
+    }
+
+    @Test func joinRoundTrips() {
+        let words = expected + ["", "it's", #"a"b"#, "$HOME", "plain-word_1.2:3"]
+        #expect(ShellWords.split(ShellWords.join(words)) == words)
+        #expect(ShellWords.join(expected) == #"--server --server-host 127.0.0.1 --server-port 6742 --profile "Everyday - Midnight Teal""#)
+    }
+}
+
 @Suite struct AppFoldersTests {
     @Test func storesFoldersWithTildeAndNoTrailingSlash() {
         let home = FileManager.default.homeDirectoryForCurrentUser.path
@@ -429,7 +465,10 @@ private let dock = NetworkConnection(
                 ConditionClause(.usbDevice(name: "USB Receiver", vendorID: 1133, productID: 50475, serialNumber: nil)),
                 ConditionClause(.display(name: "LG ULTRAWIDE", vendorID: 7789, modelID: 30625, serialNumber: nil), isNegated: true, duration: 600),
             ],
-            appRules: [AppRule(bundleIdentifier: nil, path: "/usr/local/bin/sync-notes", displayName: "sync-notes", action: .launch)]
+            appRules: [AppRule(bundleIdentifier: nil, path: "/usr/local/bin/sync-notes", displayName: "sync-notes", action: .launch,
+                               arguments: ["--profile", "Everyday - Midnight Teal"]),
+                       AppRule(bundleIdentifier: "com.yourcompany.OpenRGB", path: "/Users/me/Applications/OpenRGB.app",
+                               displayName: "OpenRGB", action: .launch, arguments: ["--server"], runsDirectly: true)]
         )
         let decoded = try JSONDecoder().decode(Profile.self, from: JSONEncoder().encode(profile))
         #expect(decoded == profile)

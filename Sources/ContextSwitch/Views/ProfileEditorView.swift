@@ -155,8 +155,11 @@ private struct ProfileDetailEditor: View {
                             .frame(width: 20, height: 20)
                         VStack(alignment: .leading, spacing: 1) {
                             Text(rule.displayName)
-                            if rule.isExecutable, let path = rule.path {
-                                Text(path)
+                            // e.g. "/usr/local/bin/sync-notes --quiet"
+                            let detail = [rule.isExecutable ? rule.path : nil, rule.arguments.map(ShellWords.join)]
+                                .compactMap { $0 }.filter { !$0.isEmpty }
+                            if !detail.isEmpty {
+                                Text(detail.joined(separator: " "))
                                     .font(.caption)
                                     .foregroundStyle(.secondary)
                                     .lineLimit(1)
@@ -164,6 +167,7 @@ private struct ProfileDetailEditor: View {
                             }
                         }
                         Spacer()
+                        ArgumentsButton(rule: $rule)
                         Picker("", selection: $rule.action) {
                             Text("Launch").tag(AppAction.launch)
                             Text("Quit").tag(AppAction.quit)
@@ -456,6 +460,105 @@ private struct ConditionRow: View {
 func countdownLabel(_ interval: TimeInterval) -> String {
     let duration = Duration.seconds(max(0, interval.rounded(.up)))
     return duration.formatted(.time(pattern: interval >= 3600 ? .hourMinuteSecond : .minuteSecond))
+}
+
+/// Opens a popover to paste what an app or executable is launched with.
+private struct ArgumentsButton: View {
+    @Binding var rule: AppRule
+    @State private var isEditing = false
+
+    var body: some View {
+        let arguments = rule.arguments ?? []
+        let isSet = !arguments.isEmpty || rule.runsDirectly == true
+        Button {
+            isEditing = true
+        } label: {
+            Image(systemName: "terminal")
+                .foregroundStyle(isSet ? AnyShapeStyle(.tint) : AnyShapeStyle(.secondary))
+        }
+        .buttonStyle(.borderless)
+        .help(isSet ? "Launches \(rule.runsDirectly == true ? "directly " : "")with: \(ShellWords.join(arguments))"
+                    : "Launch options")
+        .popover(isPresented: $isEditing, arrowEdge: .bottom) {
+            ArgumentsEditor(rule: rule) { rule = $0 }
+        }
+    }
+}
+
+private struct ArgumentsEditor: View {
+    @Environment(\.dismiss) private var dismiss
+    let rule: AppRule
+    let onSave: (AppRule) -> Void
+    @State private var text: String
+    @State private var runsDirectly: Bool
+
+    init(rule: AppRule, onSave: @escaping (AppRule) -> Void) {
+        self.rule = rule
+        self.onSave = onSave
+        _text = State(initialValue: ShellWords.join(rule.arguments ?? []))
+        _runsDirectly = State(initialValue: rule.runsDirectly == true)
+    }
+
+    /// nil while a quote is open.
+    private var arguments: [String]? {
+        ShellWords.arguments(fromCommandLine: text, program: AppLauncherService.shared.executableURL(for: rule))
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Text("Launch Options for \(rule.displayName)")
+                .font(.headline)
+            Text("Arguments")
+                .font(.subheadline)
+            TextEditor(text: $text)
+                .font(.body.monospaced())
+                .autocorrectionDisabled()
+                .frame(width: 400, height: 110)
+                .overlay(RoundedRectangle(cornerRadius: 4).stroke(.separator))
+            Group {
+                if let arguments {
+                    if arguments.isEmpty {
+                        Text("Paste them as you'd type them in Terminal — quotes and \\ line breaks are fine, and so is the whole command.")
+                    } else {
+                        Text("Runs: \(rule.displayName) \(ShellWords.join(arguments))")
+                            .textSelection(.enabled)
+                    }
+                } else {
+                    Text("A quote isn't closed.")
+                        .foregroundStyle(.red)
+                }
+                Text("Used when ContextSwitch launches it — not if it's already running.")
+            }
+            .font(.caption)
+            .foregroundStyle(.secondary)
+            .fixedSize(horizontal: false, vertical: true)
+            if !rule.isExecutable {
+                Divider()
+                Toggle("Start the program directly, as Terminal does", isOn: $runsDirectly)
+                Text("For server or daemon modes, like OpenRGB --server, that never finish launching as an app — the Dock icon keeps bouncing. ContextSwitch runs the program inside the app instead, and quits it the same way, so it can't ask to save changes.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            HStack {
+                Spacer()
+                Button("Cancel") { dismiss() }
+                    .keyboardShortcut(.cancelAction)
+                Button("Save") {
+                    guard let arguments else { return }
+                    var updated = rule
+                    updated.arguments = arguments.isEmpty ? nil : arguments
+                    updated.runsDirectly = runsDirectly ? true : nil
+                    onSave(updated)
+                    dismiss()
+                }
+                .keyboardShortcut(.defaultAction)
+                .disabled(arguments == nil)
+            }
+        }
+        .padding()
+        .frame(width: 432)
+    }
 }
 
 struct RemoveButton: View {

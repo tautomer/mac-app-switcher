@@ -59,17 +59,22 @@ final class AppLauncherService {
     private var launchedProcesses: [String: Process] = [:]
 
     func isRunning(_ rule: AppRule) -> Bool {
-        if rule.isExecutable {
-            guard let path = rule.path else { return false }
-            return launchedProcesses[path]?.isRunning == true || !Self.pids(forExecutableAt: path).isEmpty
-        }
-        return !runningApplications(for: rule).isEmpty
+        if !rule.isExecutable, !runningApplications(for: rule).isEmpty { return true }
+        guard let path = directPath(for: rule) else { return false }
+        return launchedProcesses[path]?.isRunning == true || !Self.pids(forExecutableAt: path).isEmpty
+    }
+
+    /// The program run without Launch Services: a script or tool, or the
+    /// binary inside an app set to run directly. nil for apps opened normally.
+    private func directPath(for rule: AppRule) -> String? {
+        if rule.isExecutable { return rule.path }
+        return rule.runsDirectly == true ? executableURL(for: rule)?.path : nil
     }
 
     /// `completion` always arrives asynchronously, on the main actor.
     func launch(_ rule: AppRule, completion: (@MainActor @Sendable (Bool) -> Void)? = nil) {
-        if rule.isExecutable {
-            let started = rule.path.map(runExecutable(at:)) ?? false
+        if rule.isExecutable || rule.runsDirectly == true {
+            let started = directPath(for: rule).map { runExecutable(at: $0, arguments: rule.arguments ?? []) } ?? false
             Task { @MainActor in completion?(started) }
             return
         }
@@ -79,17 +84,20 @@ final class AppLauncherService {
         }
         let config = NSWorkspace.OpenConfiguration()
         config.activates = false
+        config.arguments = rule.arguments ?? []
         NSWorkspace.shared.openApplication(at: url, configuration: config) { _, error in
             let succeeded = error == nil
             Task { @MainActor in completion?(succeeded) }
         }
     }
 
-    /// Sends a normal Quit / SIGTERM, so apps can still show "save
-    /// changes?" dialogs.
+    /// Sends apps a normal Quit, so they can still show "save changes?"
+    /// dialogs; programs run directly get SIGTERM.
     func quit(_ rule: AppRule) {
-        if rule.isExecutable {
-            guard let path = rule.path else { return }
+        // Programs run directly are stopped as Terminal would stop them: an
+        // app's binary run that way may never become an app that can be
+        // asked to quit (a headless server).
+        if let path = directPath(for: rule) {
             launchedProcesses[path]?.terminate()
             for pid in Self.pids(forExecutableAt: path) {
                 kill(pid, SIGTERM)
@@ -107,6 +115,12 @@ final class AppLauncherService {
             return url
         }
         return rule.path.map { URL(fileURLWithPath: $0) }
+    }
+
+    /// The binary that runs: inside the bundle for an app.
+    func executableURL(for rule: AppRule) -> URL? {
+        if rule.isExecutable { return rule.path.map { URL(fileURLWithPath: $0) } }
+        return appURL(for: rule).flatMap { Bundle(url: $0)?.executableURL }
     }
 
     func icon(for rule: AppRule) -> NSImage {
@@ -169,10 +183,11 @@ final class AppLauncherService {
     }
 
     /// true if it started, or was already running.
-    private func runExecutable(at path: String) -> Bool {
+    private func runExecutable(at path: String, arguments: [String]) -> Bool {
         guard launchedProcesses[path]?.isRunning != true, Self.pids(forExecutableAt: path).isEmpty else { return true }
         let process = Process()
         process.executableURL = URL(fileURLWithPath: path)
+        process.arguments = arguments
         process.currentDirectoryURL = FileManager.default.homeDirectoryForCurrentUser
         process.standardOutput = FileHandle.nullDevice
         process.standardError = FileHandle.nullDevice

@@ -15,6 +15,14 @@ struct AppRule: Codable, Hashable, Identifiable {
     var path: String?
     var displayName: String
     var action: AppAction
+    /// Passed when ContextSwitch launches it, e.g. `--server --port 6742`.
+    /// Not applied to an instance that's already running.
+    var arguments: [String]?
+    /// For an app: run the program inside the bundle directly, as Terminal
+    /// does, instead of opening the app. For server/daemon modes (e.g.
+    /// `OpenRGB --server`) that never finish launching as an app, so the
+    /// Dock icon would bounce for good.
+    var runsDirectly: Bool?
 
     /// Session-only manual override set from the menu bar popover. Not
     /// persisted — it resets whenever the profile re-activates.
