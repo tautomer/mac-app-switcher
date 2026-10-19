@@ -46,6 +46,15 @@ struct MenuBarContentView: View {
                 Text(appState.isAutoSwitchEnabled ? "Auto-detected" : "Auto-switch off")
                     .font(.caption)
                     .foregroundStyle(.secondary)
+                if let pending = appState.pendingSwitch {
+                    TimelineView(.periodic(from: .now, by: 1)) { context in
+                        Label("Switching to “\(pending.profile.name)” in \(countdownLabel(pending.at.timeIntervalSince(context.date)))",
+                              systemImage: "hourglass")
+                    }
+                    .font(.caption)
+                    .foregroundStyle(.tint)
+                    .help("If nothing changes first — e.g. you plug the dock back in")
+                }
                 Label(networkSummary, systemImage: networkSymbol)
                     .font(.caption)
                     .foregroundStyle(.secondary)

@@ -11,6 +11,11 @@ final class AppState: ObservableObject {
     /// off by picking a profile by hand; remembered across launches.
     @Published private(set) var isAutoSwitchEnabled: Bool = AppState.defaults.object(forKey: DefaultsKey.autoSwitch) as? Bool ?? true
     @Published private(set) var snapshot: NetworkSnapshot = .empty
+    /// Settled snapshots, for timed conditions ("for 5 min").
+    @Published private(set) var history = SnapshotHistory()
+    /// A profile auto-switch will move to once its timer runs out, unless
+    /// things change first.
+    @Published private(set) var pendingSwitch: PendingMatch?
     @Published var launchAtLogin: Bool = LoginItemManager.isEnabled
     /// Where "Add App…" looks (see `AppFolders`).
     @Published private(set) var appFolders: [String] = AppState.defaults.stringArray(forKey: DefaultsKey.appFolders) ?? AppFolders.defaults
@@ -25,6 +30,9 @@ final class AppState: ObservableObject {
     private let launcher = AppLauncherService.shared
     private var cancellables = Set<AnyCancellable>()
     private var hasStarted = false
+    /// Re-checks when `pendingSwitch` is due: a timer running out doesn't
+    /// change the snapshot, so nothing else would notice.
+    private var pendingCheck: Task<Void, Never>?
 
     /// How long the network has to stay put before we switch profiles.
     /// Joining a network goes through several intermediate states (link up,
@@ -60,14 +68,17 @@ final class AppState: ObservableObject {
             .store(in: &cancellables)
 
         // The UI shows network changes immediately; profile switching waits
-        // for them to settle.
+        // for them to settle, and so do timers — a blip doesn't restart one.
         networkMonitor.$snapshot
             .sink { [weak self] in self?.snapshot = $0 }
             .store(in: &cancellables)
         networkMonitor.$snapshot
             .dropFirst()
             .debounce(for: Self.settleDelay, scheduler: DispatchQueue.main)
-            .sink { [weak self] _ in self?.reevaluate() }
+            .sink { [weak self] settled in
+                self?.history.record(settled, at: Date())
+                self?.reevaluate()
+            }
             .store(in: &cancellables)
 
         locationMonitor.$authorizationStatus
@@ -153,16 +164,30 @@ final class AppState: ObservableObject {
 
     func reevaluate() {
         guard isAutoSwitchEnabled else { return }
+        let decision = ProfileMatcher.autoSwitch(for: snapshot, in: profiles, current: activeProfile,
+                                                 history: history, at: Date())
+        setPendingSwitch(decision.pending)
         // Offline usually means mid-switch (Wi-Fi rejoining, DHCP pending).
         // Keep the current profile rather than bouncing to the fallback and
         // back, which would quit and relaunch apps for nothing.
         if !snapshot.isOnline && activeProfile != nil { return }
-        let best = ProfileMatcher.bestMatch(for: snapshot, in: profiles)
-        guard best?.id != activeProfile?.id else { return }
-        if let best {
-            apply(best)
+        guard decision.profile?.id != activeProfile?.id else { return }
+        if let profile = decision.profile {
+            apply(profile)
         } else {
             activeProfile = nil
+        }
+    }
+
+    private func setPendingSwitch(_ pending: PendingMatch?) {
+        pendingSwitch = pending
+        pendingCheck?.cancel()
+        guard let pending else { return }
+        pendingCheck = Task { [weak self] in
+            // The continuous clock keeps counting while the Mac sleeps.
+            try? await Task.sleep(for: .seconds(max(0, pending.at.timeIntervalSinceNow) + 0.5))
+            guard !Task.isCancelled else { return }
+            self?.reevaluate()
         }
     }
 
@@ -174,7 +199,7 @@ final class AppState: ObservableObject {
     func setAutoSwitch(_ enabled: Bool) {
         isAutoSwitchEnabled = enabled
         Self.defaults.set(enabled, forKey: DefaultsKey.autoSwitch)
-        if enabled { reevaluate() }
+        if enabled { reevaluate() } else { setPendingSwitch(nil) }
     }
 
     @discardableResult
@@ -205,13 +230,13 @@ final class AppState: ObservableObject {
                 reply = .init(id: request.id, status: CLI.ExitStatus.unknownProfile,
                               output: CLI.unknownProfileMessage(name, profiles: profiles))
             }
-        } else if let best = ProfileMatcher.bestMatch(for: snapshot, in: profiles) {
+        } else if let best = ProfileMatcher.bestMatch(for: snapshot, in: profiles, history: history) {
             let output = CLI.report(profile: best, outcomes: apply(best),
                                     reason: best.isFallback ? .fallback : .matched, dryRun: false)
             reply = .init(id: request.id, status: CLI.ExitStatus.success, output: output)
         } else {
             reply = .init(id: request.id, status: CLI.ExitStatus.noMatchingProfile,
-                          output: CLI.noMatchMessage(snapshot: snapshot, profiles: profiles))
+                          output: CLI.noMatchMessage(snapshot: snapshot, profiles: profiles, history: history))
         }
         RemoteCommand.post(RemoteCommand.replyName, userInfo: reply.userInfo)
     }

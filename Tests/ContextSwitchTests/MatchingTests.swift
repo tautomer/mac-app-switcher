@@ -113,6 +113,149 @@ private let dock = NetworkConnection(
     }
 }
 
+@Suite struct TimedConditionTests {
+    let tbDock = NetworkCondition.usbDevice(name: "40AY", vendorID: 6127, productID: 12457, serialNumber: "1S40AY0090USZVV1ESKM")
+    let docked = NetworkSnapshot(connections: [dock], usbDevices: [
+        USBDevice(name: "40AY", manufacturer: "Lenovo", vendorID: 6127, productID: 12457, serialNumber: "1S40AY0090USZVV1ESKM"),
+    ])
+    let undocked = NetworkSnapshot(connections: [wifi])
+    let t0 = Date(timeIntervalSinceReferenceDate: 800_000_000)
+
+    private func minutes(_ m: Double) -> Date { t0 + m * 60 }
+
+    /// Docked at launch, unplugged at minute 10.
+    private var unpluggedAtTen: SnapshotHistory {
+        var history = SnapshotHistory()
+        history.record(docked, at: t0)
+        history.record(undocked, at: minutes(10))
+        return history
+    }
+
+    @Test func countsOnceHeldLongEnough() {
+        let notDocked5 = ConditionClause(tbDock, isNegated: true, duration: 5 * 60)
+        let history = unpluggedAtTen
+        #expect(notDocked5.evaluate(undocked, history: history, at: minutes(12)) == false)
+        #expect(notDocked5.holdsFrom(undocked, history: history, at: minutes(12)) == minutes(15))
+        #expect(notDocked5.evaluate(undocked, history: history, at: minutes(15)) == true)
+        #expect(notDocked5.summary == "not USB Device “40AY” for 5 min")
+    }
+
+    @Test func aBlipInSomethingElseDoesNotRestartTheTimer() {
+        var history = unpluggedAtTen
+        var otherNetwork = undocked
+        otherNetwork.dnsDomains = ["guest.example.com"]
+        history.record(otherNetwork, at: minutes(13))
+        let notDocked5 = ConditionClause(tbDock, isNegated: true, duration: 5 * 60)
+        #expect(notDocked5.evaluate(otherNetwork, history: history, at: minutes(15)) == true)
+    }
+
+    @Test func whatIsFoundAtLaunchCountsAsLongStanding() {
+        var history = SnapshotHistory()
+        history.record(undocked, at: t0)
+        #expect(ConditionClause(tbDock, isNegated: true, duration: 5 * 60).evaluate(undocked, history: history, at: t0) == true)
+    }
+
+    @Test func aChangeNotYetRecordedCountsFromNow() {
+        // The editor shows the live snapshot; the history only has settled ones.
+        var history = SnapshotHistory()
+        history.record(docked, at: t0)
+        let clause = ConditionClause(tbDock, isNegated: true, duration: 5 * 60)
+        #expect(clause.holdsFrom(undocked, history: history, at: minutes(1)) == minutes(6))
+    }
+
+    @Test func withoutHistoryATimerCannotBeTold() {
+        let clause = ConditionClause(tbDock, isNegated: true, duration: 5 * 60)
+        #expect(clause.evaluate(undocked) == nil)
+        #expect(clause.evaluate(docked) == false)  // not unplugged at all
+    }
+
+    @Test func historyKeepsADay() {
+        var history = SnapshotHistory()
+        history.record(docked, at: t0)
+        for hour in 1...48 {
+            history.record(hour.isMultiple(of: 2) ? docked : undocked, at: t0 + Double(hour) * 3600)
+        }
+        let now = t0 + 48 * 3600
+        #expect(history.entries.count < 30)
+        #expect(history.entries[0].since <= now - SnapshotHistory.window)
+        #expect(history.since(tbDock, was: true, at: now) == now)
+    }
+
+    @Test func roundTripsDuration() throws {
+        let clause = ConditionClause(tbDock, isNegated: true, duration: 300)
+        let decoded = try JSONDecoder().decode(ConditionClause.self, from: JSONEncoder().encode(clause))
+        #expect(decoded == clause)
+        #expect(ConditionClause.label(forDuration: 90 * 60) == "1 h 30 min")
+        #expect(ConditionClause.label(forDuration: 3600) == "1 hour")
+    }
+}
+
+/// The two-profile setup from the timer's motivation: at the office desk on
+/// the dock, or somewhere else on site without it. Unplugging for a few
+/// minutes to show a coworker something shouldn't switch.
+@Suite struct InBetweenTests {
+    let tbDock = NetworkCondition.usbDevice(name: "40AY", vendorID: 6127, productID: 12457, serialNumber: "1S40AY0090USZVV1ESKM")
+    let docked = NetworkSnapshot(connections: [dock], usbDevices: [
+        USBDevice(name: "40AY", manufacturer: "Lenovo", vendorID: 6127, productID: 12457, serialNumber: "1S40AY0090USZVV1ESKM"),
+    ])
+    let undocked = NetworkSnapshot(connections: [wifi])
+    let t0 = Date(timeIntervalSinceReferenceDate: 800_000_000)
+
+    var fallback: Profile { Profile(name: "Default") }
+    var office: Profile { Profile(name: "Office", conditions: [ConditionClause(tbDock)], priority: 2) }
+    var onSite: Profile { Profile(name: "On Site", conditions: [ConditionClause(tbDock, isNegated: true, duration: 5 * 60)], priority: 1) }
+
+    private func minutes(_ m: Double) -> Date { t0 + m * 60 }
+
+    @Test func staysPutWhileTheTimerRuns() {
+        let profiles = [fallback, office, onSite]
+        var history = SnapshotHistory()
+        history.record(docked, at: t0)
+        history.record(undocked, at: minutes(10))
+
+        let during = ProfileMatcher.autoSwitch(for: undocked, in: profiles, current: office, history: history, at: minutes(12))
+        #expect(during.profile?.name == "Office")
+        #expect(during.pending?.profile.name == "On Site")
+        #expect(during.pending?.at == minutes(15))
+
+        let after = ProfileMatcher.autoSwitch(for: undocked, in: profiles, current: office, history: history, at: minutes(15))
+        #expect(after.profile?.name == "On Site")
+        #expect(after.pending == nil)
+    }
+
+    @Test func pluggingBackInCancelsTheSwitch() {
+        let profiles = [fallback, office, onSite]
+        var history = SnapshotHistory()
+        history.record(docked, at: t0)
+        history.record(undocked, at: minutes(10))
+        history.record(docked, at: minutes(13))
+        let back = ProfileMatcher.autoSwitch(for: docked, in: profiles, current: office, history: history, at: minutes(16))
+        #expect(back.profile?.name == "Office")
+        #expect(back.pending == nil)
+    }
+
+    @Test func aHigherProfileThatMatchesNowIsNotHeldUp() {
+        let home = Profile(name: "Home", conditions: [ConditionClause(.ssid("Home-WiFi"))], priority: 5)
+        var history = SnapshotHistory()
+        history.record(docked, at: t0)
+        history.record(undocked, at: minutes(10))
+        let result = ProfileMatcher.autoSwitch(for: undocked, in: [fallback, office, onSite, home], current: office,
+                                               history: history, at: minutes(11))
+        #expect(result.profile?.name == "Home")
+        #expect(result.pending == nil)  // On Site wouldn't outrank Home anyway
+    }
+
+    @Test func withNothingActiveThereIsNothingToHold() {
+        var history = SnapshotHistory()
+        history.record(docked, at: t0)
+        history.record(undocked, at: minutes(10))
+        let result = ProfileMatcher.autoSwitch(for: undocked, in: [fallback, office, onSite], current: nil,
+                                               history: history, at: minutes(11))
+        #expect(result.profile?.name == "Default")
+        #expect(result.pending?.profile.name == "On Site")
+    }
+}
+
 @Suite struct AppFoldersTests {
     @Test func storesFoldersWithTildeAndNoTrailingSlash() {
         let home = FileManager.default.homeDirectoryForCurrentUser.path
@@ -284,7 +427,7 @@ private let dock = NetworkConnection(
                 ConditionClause(.dnsDomain("corp.example.com"), connector: .or),
                 ConditionClause(.usbDevice(name: "40AY", vendorID: 6127, productID: 12457, serialNumber: "1S40AY0090USZVV1ESKM")),
                 ConditionClause(.usbDevice(name: "USB Receiver", vendorID: 1133, productID: 50475, serialNumber: nil)),
-                ConditionClause(.display(name: "LG ULTRAWIDE", vendorID: 7789, modelID: 30625, serialNumber: nil), isNegated: true),
+                ConditionClause(.display(name: "LG ULTRAWIDE", vendorID: 7789, modelID: 30625, serialNumber: nil), isNegated: true, duration: 600),
             ],
             appRules: [AppRule(bundleIdentifier: nil, path: "/usr/local/bin/sync-notes", displayName: "sync-notes", action: .launch)]
         )

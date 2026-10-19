@@ -28,16 +28,28 @@ struct Profile: Codable, Hashable, Identifiable {
     }
 
     /// nil when the outcome hinges on something we can't read yet (a hidden
-    /// Wi-Fi name, no location fix). Fallback profiles evaluate to false.
-    func evaluate(_ snapshot: NetworkSnapshot) -> Bool? {
+    /// Wi-Fi name, no location fix, a timer without a history). Fallback
+    /// profiles evaluate to false.
+    func evaluate(_ snapshot: NetworkSnapshot, history: SnapshotHistory? = nil, at now: Date = Date()) -> Bool? {
         guard !conditions.isEmpty else { return false }
         return Kleene.any(conditionGroups.map { group in
-            Kleene.all(group.map { $0.evaluate(snapshot) })
+            Kleene.all(group.map { $0.evaluate(snapshot, history: history, at: now) })
         })
     }
 
-    func matches(_ snapshot: NetworkSnapshot) -> Bool {
-        evaluate(snapshot) == true
+    func matches(_ snapshot: NetworkSnapshot, history: SnapshotHistory? = nil, at now: Date = Date()) -> Bool {
+        evaluate(snapshot, history: history, at: now) == true
+    }
+
+    /// When the profile matches if nothing changes: by `now` if it already
+    /// does, later while it waits on a timer. nil if it doesn't match (or
+    /// can't be told), and for fallback profiles.
+    func matchesFrom(_ snapshot: NetworkSnapshot, history: SnapshotHistory?, at now: Date) -> Date? {
+        conditionGroups.compactMap { group -> Date? in
+            let times = group.map { $0.holdsFrom(snapshot, history: history, at: now) }
+            return times.contains(nil) ? nil : times.compactMap { $0 }.max()
+        }
+        .min()
     }
 
     /// e.g. `(Wi-Fi Network “Home” and not Ethernet Adapter “Dock”) or DNS Domain “corp.com”`

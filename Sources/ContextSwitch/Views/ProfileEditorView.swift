@@ -217,7 +217,9 @@ private struct ProfileDetailEditor: View {
                         ConditionRow(
                             clause: clause,
                             isNegated: negationBinding(for: clause.id),
-                            status: clause.evaluate(appState.snapshot),
+                            duration: durationBinding(for: clause.id),
+                            snapshot: appState.snapshot,
+                            history: appState.history,
                             onRemove: { profile.removeCondition(id: clause.id) }
                         )
                     }
@@ -269,20 +271,35 @@ private struct ProfileDetailEditor: View {
             }
 
             Group {
-                switch profile.evaluate(appState.snapshot) {
-                case true?:
-                    Label("Matches right now", systemImage: "checkmark.circle.fill")
-                        .foregroundStyle(.green)
-                case false?:
-                    Label("Doesn't match right now", systemImage: "xmark.circle")
-                        .foregroundStyle(.secondary)
-                case nil:
-                    Label("Can't tell yet — waiting on Location access or a location fix", systemImage: "questionmark.circle")
-                        .foregroundStyle(.orange)
+                if profile.conditions.contains(where: { $0.duration != nil }) {
+                    TimelineView(.periodic(from: .now, by: 1)) { context in matchStatus(at: context.date) }
+                } else {
+                    matchStatus(at: Date())
                 }
             }
             .font(.caption)
             .help("Matches when \(profile.conditionSummary)")
+        }
+    }
+
+    @ViewBuilder
+    private func matchStatus(at now: Date) -> some View {
+        let snapshot = appState.snapshot, history = appState.history
+        if let from = profile.matchesFrom(snapshot, history: history, at: now), from > now {
+            Label("Matches in \(countdownLabel(from.timeIntervalSince(now))) if nothing changes", systemImage: "hourglass")
+                .foregroundStyle(.tint)
+        } else {
+            switch profile.evaluate(snapshot, history: history, at: now) {
+            case true?:
+                Label("Matches right now", systemImage: "checkmark.circle.fill")
+                    .foregroundStyle(.green)
+            case false?:
+                Label("Doesn't match right now", systemImage: "xmark.circle")
+                    .foregroundStyle(.secondary)
+            case nil:
+                Label("Can't tell yet — waiting on Location access or a location fix", systemImage: "questionmark.circle")
+                    .foregroundStyle(.orange)
+            }
         }
     }
 
@@ -296,16 +313,30 @@ private struct ProfileDetailEditor: View {
             }
         )
     }
+
+    private func durationBinding(for id: ConditionClause.ID) -> Binding<TimeInterval?> {
+        Binding(
+            get: { profile.conditions.first { $0.id == id }?.duration },
+            set: { newValue in
+                if let index = profile.conditions.firstIndex(where: { $0.id == id }) {
+                    profile.conditions[index].duration = newValue
+                }
+            }
+        )
+    }
 }
 
-/// `[icon] Kind   is ⌄   value   status  ⊖` — fixed-width leading columns
-/// so rows line up into a table.
+/// `[icon] Kind   is ⌄   value   for 5 min ⌄  status  ⊖` — fixed-width
+/// leading columns so rows line up into a table.
 private struct ConditionRow: View {
     let clause: ConditionClause
     @Binding var isNegated: Bool
-    /// The clause's value right now; nil = can't tell.
-    let status: Bool?
+    @Binding var duration: TimeInterval?
+    let snapshot: NetworkSnapshot
+    let history: SnapshotHistory
     let onRemove: () -> Void
+
+    private static let presetMinutes: [TimeInterval] = [1, 2, 5, 10, 15, 30, 60]
 
     var body: some View {
         HStack(spacing: 10) {
@@ -346,28 +377,85 @@ private struct ConditionRow: View {
                 .lineLimit(1)
                 .truncationMode(.middle)
             Spacer(minLength: 8)
-            statusIcon
+            durationMenu
+            if duration == nil {
+                statusIcon(at: Date())
+            } else {
+                // Counts down.
+                TimelineView(.periodic(from: .now, by: 1)) { context in statusIcon(at: context.date) }
+            }
             RemoveButton(action: onRemove)
         }
     }
 
+    private var durationMenu: some View {
+        Menu {
+            Picker("Duration", selection: $duration) {
+                Text("Right away").tag(TimeInterval?.none)
+                Section("Only once it's held for") {
+                    ForEach(Self.presetMinutes, id: \.self) { minutes in
+                        Text(ConditionClause.label(forDuration: minutes * 60)).tag(TimeInterval?(minutes * 60))
+                    }
+                    // A duration set in profiles.json by hand.
+                    if let duration, !Self.presetMinutes.contains(duration / 60) {
+                        Text(ConditionClause.label(forDuration: duration)).tag(TimeInterval?(duration))
+                    }
+                }
+            }
+            .pickerStyle(.inline)
+            .labelsHidden()
+        } label: {
+            if let duration {
+                HStack(spacing: 3) {
+                    Text("for \(ConditionClause.label(forDuration: duration))")
+                    Image(systemName: "chevron.down")
+                        .font(.caption2.weight(.semibold))
+                }
+                .foregroundStyle(.tint)
+                .contentShape(Rectangle())
+            } else {
+                Image(systemName: "timer")
+                    .foregroundStyle(.secondary)
+                    .contentShape(Rectangle())
+            }
+        }
+        .menuStyle(.button)
+        .buttonStyle(.plain)
+        .menuIndicator(.hidden)
+        .fixedSize()
+        .help(duration.map { "Counts once this has held for \(ConditionClause.label(forDuration: $0))" }
+              ?? "Add a timer: count this only once it has held for a while — e.g. a dock unplugged for 5 minutes, not just for a quick chat")
+    }
+
     @ViewBuilder
-    private var statusIcon: some View {
-        switch status {
-        case true?:
-            Image(systemName: "checkmark.circle.fill")
-                .foregroundStyle(.green)
-                .help("True right now")
-        case false?:
-            Image(systemName: "xmark.circle")
-                .foregroundStyle(.secondary)
-                .help("False right now")
-        case nil:
-            Image(systemName: "questionmark.circle")
-                .foregroundStyle(.orange)
-                .help("Can't tell yet — needs Location access or a location fix")
+    private func statusIcon(at now: Date) -> some View {
+        if let from = clause.holdsFrom(snapshot, history: history, at: now), from > now {
+            Image(systemName: "hourglass")
+                .foregroundStyle(.tint)
+                .help("Counts in \(countdownLabel(from.timeIntervalSince(now))) if nothing changes")
+        } else {
+            switch clause.evaluate(snapshot, history: history, at: now) {
+            case true?:
+                Image(systemName: "checkmark.circle.fill")
+                    .foregroundStyle(.green)
+                    .help("True right now")
+            case false?:
+                Image(systemName: "xmark.circle")
+                    .foregroundStyle(.secondary)
+                    .help("False right now")
+            case nil:
+                Image(systemName: "questionmark.circle")
+                    .foregroundStyle(.orange)
+                    .help("Can't tell yet — needs Location access or a location fix")
+            }
         }
     }
+}
+
+/// e.g. "4:59", or "1:04:59" for an hour or more.
+func countdownLabel(_ interval: TimeInterval) -> String {
+    let duration = Duration.seconds(max(0, interval.rounded(.up)))
+    return duration.formatted(.time(pattern: interval >= 3600 ? .hourMinuteSecond : .minuteSecond))
 }
 
 struct RemoveButton: View {

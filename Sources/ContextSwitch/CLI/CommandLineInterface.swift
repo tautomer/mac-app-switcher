@@ -172,16 +172,17 @@ enum CommandLineInterface {
         return "No profile named “\(name)”. Profiles: \(names.isEmpty ? "none" : names)"
     }
 
-    static func noMatchMessage(snapshot: NetworkSnapshot, profiles: [Profile]) -> String {
+    static func noMatchMessage(snapshot: NetworkSnapshot, profiles: [Profile], history: SnapshotHistory? = nil) -> String {
         var message = "No profile matches right now, and there's no fallback profile."
-        if profiles.contains(where: { $0.evaluate(snapshot) == nil }) {
+        if profiles.contains(where: { $0.evaluate(snapshot, history: history) == nil }) {
             message += "\nSome conditions couldn't be checked — \(unknownExplanation)"
         }
         return message
     }
 
     private static let unknownExplanation =
-        "macOS hides the Wi-Fi name without Location access, and places need a location fix. "
+        "macOS hides the Wi-Fi name without Location access, places need a location fix, "
+        + "and timed conditions (“for 5 min”) need watching over time. "
         + "With the menu bar app running, switching is done by it, which can check these."
 
     private static func networkSummary(_ snapshot: NetworkSnapshot) -> String {
