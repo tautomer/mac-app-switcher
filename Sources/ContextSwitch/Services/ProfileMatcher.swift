@@ -20,13 +20,19 @@ enum ProfileMatcher {
         return profiles.first { $0.isFallback }
     }
 
+    /// How long auto-switch keeps the current profile while the Mac is
+    /// offline (see `autoSwitch`).
+    static let offlineGrace: TimeInterval = 60
+
     /// What auto-switch should be on: the best match — unless a profile that
     /// would outrank it is only waiting on a timer. Then `current` stays
     /// until the timer runs out (or things change), so unplugging the dock
     /// for a few minutes doesn't pass through an in-between profile.
-    /// `pending` is the first such profile, to check on when it's due.
+    /// `pending` is the first such profile, to show in the menu; `checkAt`
+    /// is when to decide again even if nothing changes.
     static func autoSwitch(for snapshot: NetworkSnapshot, in profiles: [Profile], current: Profile?,
-                           history: SnapshotHistory, at now: Date) -> (profile: Profile?, pending: PendingMatch?) {
+                           history: SnapshotHistory, at now: Date)
+        -> (profile: Profile?, pending: PendingMatch?, checkAt: Date?) {
         let best = bestMatch(for: snapshot, in: profiles, history: history, at: now)
         let pending = profiles
             .compactMap { profile -> PendingMatch? in
@@ -36,10 +42,21 @@ enum ProfileMatcher {
                 return PendingMatch(profile: profile, at: at)
             }
             .min { $0.at < $1.at }
-        if pending != nil, let current {
-            return (current, pending)
+        if let pending, let current {
+            return (current, pending, pending.at)
         }
-        return (best, pending)
+        // Offline usually means mid-switch (Wi-Fi rejoining, DHCP pending):
+        // keep `current` for a while rather than bouncing to the fallback
+        // and back, which would quit and relaunch apps for nothing. Only for
+        // a while, though — a Mac that stays offline (undocked with Wi-Fi
+        // off, on a plane) should still get the profile that matches.
+        if !snapshot.isOnline, let current, best?.id != current.id {
+            let until = history.offlineSince(at: now) + offlineGrace
+            if until > now {
+                return (current, best.map { PendingMatch(profile: $0, at: until) }, until)
+            }
+        }
+        return (best, pending, pending?.at)
     }
 
     private static func outranks(_ profile: Profile, _ best: Profile?) -> Bool {

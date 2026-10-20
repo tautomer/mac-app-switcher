@@ -12,6 +12,26 @@ struct SettingsView: View {
                     get: { appState.launchAtLogin },
                     set: { appState.setLaunchAtLogin($0) }
                 ))
+                Toggle("Notify me when the profile switches on its own", isOn: Binding(
+                    get: { appState.notifiesOnSwitch },
+                    set: { appState.setNotifiesOnSwitch($0) }
+                ))
+                Toggle("Notify me when something goes wrong", isOn: Binding(
+                    get: { appState.notifiesOnProblems },
+                    set: { appState.setNotifiesOnProblems($0) }
+                ))
+                if appState.notificationsAllowed == false && (appState.notifiesOnSwitch || appState.notifiesOnProblems) {
+                    HStack {
+                        Label("Notifications are turned off for ContextSwitch in System Settings.", systemImage: "bell.slash")
+                            .foregroundStyle(.secondary)
+                        Spacer()
+                        Button("Open…") { appState.openNotificationSettings() }
+                    }
+                }
+                LabeledContent("Activity log") {
+                    Button("Open") { appState.openActivityLog() }
+                        .help("Every switch, what it launched or quit, and anything that went wrong")
+                }
             }
 
             appFolders
@@ -53,7 +73,10 @@ struct SettingsView: View {
         .fixedSize(horizontal: false, vertical: true)
         .frame(width: 460)
         .keepsAppActiveWhileOpen()
-        .onAppear { appState.refreshNetwork() }
+        .onAppear {
+            appState.refreshNetwork()
+            appState.refreshNotificationPermission()
+        }
     }
 
     private var appFolders: some View {

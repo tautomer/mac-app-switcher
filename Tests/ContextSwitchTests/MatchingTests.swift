@@ -155,6 +155,10 @@ private let dock = NetworkConnection(
         #expect(ConditionClause(tbDock, isNegated: true, duration: 5 * 60).evaluate(undocked, history: history, at: t0) == true)
     }
 
+    @Test func beforeAnythingIsRecordedTheStateCountsAsLongStanding() {
+        #expect(ConditionClause(tbDock, isNegated: true, duration: 5 * 60).evaluate(undocked, history: SnapshotHistory(), at: t0) == true)
+    }
+
     @Test func aChangeNotYetRecordedCountsFromNow() {
         // The editor shows the live snapshot; the history only has settled ones.
         var history = SnapshotHistory()
@@ -253,6 +257,83 @@ private let dock = NetworkConnection(
                                                history: history, at: minutes(11))
         #expect(result.profile?.name == "Default")
         #expect(result.pending?.profile.name == "On Site")
+    }
+}
+
+/// Offline, the current profile is kept for `ProfileMatcher.offlineGrace`
+/// — Wi-Fi rejoining shouldn't quit and relaunch apps — but not for good:
+/// undocked with Wi-Fi off, the dock's profile has to go.
+@Suite struct OfflineTests {
+    let docked = NetworkSnapshot(connections: [dock])
+    let offline = NetworkSnapshot()
+    let t0 = Date(timeIntervalSinceReferenceDate: 800_000_000)
+    let grace = ProfileMatcher.offlineGrace
+
+    var desk: Profile { Profile(name: "Desk", conditions: [ConditionClause(.ethernetAdapter(dock.serviceName))], priority: 1) }
+    var mobile: Profile { Profile(name: "Mobile") }
+
+    /// Docked at launch, offline from 10 s in.
+    private var unpluggedAtTen: SnapshotHistory {
+        var history = SnapshotHistory()
+        history.record(docked, at: t0)
+        history.record(offline, at: t0 + 10)
+        return history
+    }
+
+    @Test func keepsTheProfileThroughABriefDrop() {
+        let during = ProfileMatcher.autoSwitch(for: offline, in: [desk, mobile], current: desk, history: unpluggedAtTen, at: t0 + 30)
+        #expect(during.profile?.name == "Desk")
+        #expect(during.pending?.profile.name == "Mobile")
+        #expect(during.pending?.at == t0 + 10 + grace)
+        #expect(during.checkAt == t0 + 10 + grace)
+    }
+
+    @Test func switchesOnceOfflineForLonger() {
+        let after = ProfileMatcher.autoSwitch(for: offline, in: [desk, mobile], current: desk, history: unpluggedAtTen,
+                                              at: t0 + 10 + grace)
+        #expect(after.profile?.name == "Mobile")
+        #expect(after.pending == nil)
+        #expect(after.checkAt == nil)
+    }
+
+    @Test func withoutAFallbackItStillChecksAgain() {
+        let during = ProfileMatcher.autoSwitch(for: offline, in: [desk], current: desk, history: unpluggedAtTen, at: t0 + 30)
+        #expect(during.profile?.name == "Desk")
+        #expect(during.pending == nil)
+        #expect(during.checkAt == t0 + 10 + grace)
+        let after = ProfileMatcher.autoSwitch(for: offline, in: [desk], current: desk, history: unpluggedAtTen, at: t0 + 10 + grace)
+        #expect(after.profile == nil)
+    }
+
+    @Test func aDropNotYetRecordedCountsFromNow() {
+        // The live snapshot is ahead of the history while it settles.
+        var history = SnapshotHistory()
+        history.record(docked, at: t0)
+        let result = ProfileMatcher.autoSwitch(for: offline, in: [desk, mobile], current: desk, history: history, at: t0 + 600)
+        #expect(result.profile?.name == "Desk")
+        #expect(result.checkAt == t0 + 600 + grace)
+    }
+
+    @Test func offlineSinceLaunchIsNotHeld() {
+        // e.g. auto-switch turned back on, on a profile picked by hand.
+        var history = SnapshotHistory()
+        history.record(offline, at: t0)
+        let result = ProfileMatcher.autoSwitch(for: offline, in: [desk, mobile], current: desk, history: history, at: t0 + 5)
+        #expect(result.profile?.name == "Mobile")
+    }
+
+    @Test func beforeAnythingIsRecordedOfflineCountsAsLongStanding() {
+        // Started offline with nothing plugged in, then auto-switch turned on:
+        // waiting from "now" would wait again at every check.
+        let result = ProfileMatcher.autoSwitch(for: offline, in: [desk, mobile], current: desk, history: SnapshotHistory(), at: t0)
+        #expect(result.profile?.name == "Mobile")
+        #expect(result.checkAt == nil)
+    }
+
+    @Test func nothingIsHeldWithNothingActive() {
+        let result = ProfileMatcher.autoSwitch(for: offline, in: [desk, mobile], current: nil, history: unpluggedAtTen, at: t0 + 30)
+        #expect(result.profile?.name == "Mobile")
+        #expect(result.checkAt == nil)
     }
 }
 
@@ -382,6 +463,16 @@ private let dock = NetworkConnection(
         let p = profile(ConditionClause(homeWiFi), ConditionClause(corpDNS, connector: .or))
         #expect(p.matches(NetworkSnapshot(connections: [hidden], dnsDomains: ["corp.example.com"])))
         #expect(p.evaluate(NetworkSnapshot(connections: [hidden])) == nil)
+    }
+
+    @Test func aPlaceWithoutANameIsLabelledByWhereItIs() {
+        let unnamed = NetworkCondition.location(name: "", latitude: 40.610736, longitude: -74.262598, radiusMeters: 150)
+        #expect(unnamed.valueLabel == "40.6107, -74.2626 (±150m)")
+        #expect(ConditionClause(unnamed).summary == "Place “40.6107, -74.2626 (±150m)”")
+        #expect(NetworkCondition.location(name: "Home", latitude: 0, longitude: 0, radiusMeters: 100).valueLabel == "Home (±100m)")
+        // Matching never looked at the name.
+        let here = NetworkSnapshot(location: SimpleLocation(latitude: 40.6108, longitude: -74.2626))
+        #expect(unnamed.isSatisfied(by: here))
     }
 
     @Test func falseInAGroupOutweighsUnknown() {

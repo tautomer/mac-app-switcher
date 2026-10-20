@@ -12,6 +12,11 @@ enum EnforceOutcome: Equatable {
     case ignored
 }
 
+/// Why a launch didn't go through, for the activity log and notifications.
+struct LaunchFailure: Error {
+    let reason: String
+}
+
 /// An app or executable found in the app folders, for the "add app" picker.
 struct InstalledItem: Identifiable {
     let url: URL
@@ -30,11 +35,11 @@ final class AppLauncherService {
     static let shared = AppLauncherService()
 
     /// Brings `rule`'s target to the state `action` asks for. `onLaunched`
-    /// is called (later, on the main actor) only when a launch was started,
-    /// with whether it succeeded.
+    /// is called (later, on the main actor) only when a launch was started:
+    /// with nil if it went through, or why not.
     @discardableResult
     func enforce(_ action: AppAction, for rule: AppRule, dryRun: Bool = false,
-                 onLaunched: (@MainActor @Sendable (Bool) -> Void)? = nil) -> EnforceOutcome {
+                 onLaunched: (@MainActor @Sendable (LaunchFailure?) -> Void)? = nil) -> EnforceOutcome {
         switch action {
         case .launch:
             guard !isRunning(rule) else { return .alreadyRunning }
@@ -49,14 +54,18 @@ final class AppLauncherService {
         }
     }
 
-    /// Called when a launched executable exits, so the UI can refresh.
-    /// (App launches/quits are observed via NSWorkspace notifications.)
-    var onExecutableExit: (() -> Void)?
+    /// Called when a launched executable exits, so the UI can refresh,
+    /// with its name and, unless it ended normally or because we quit it,
+    /// what went wrong. (App launches/quits are observed via NSWorkspace
+    /// notifications.)
+    var onExecutableExit: ((_ name: String, _ problem: String?) -> Void)?
 
     /// Executables we started, by path. A script shows up in the process
     /// table under its interpreter (/bin/sh, python3…), so this is the only
     /// way to tell it's running.
     private var launchedProcesses: [String: Process] = [:]
+    /// Ones we've asked to stop, so their exit isn't reported as a problem.
+    private var stopping: Set<pid_t> = []
 
     func isRunning(_ rule: AppRule) -> Bool {
         if !rule.isExecutable, !runningApplications(for: rule).isEmpty { return true }
@@ -71,23 +80,25 @@ final class AppLauncherService {
         return rule.runsDirectly == true ? executableURL(for: rule)?.path : nil
     }
 
-    /// `completion` always arrives asynchronously, on the main actor.
-    func launch(_ rule: AppRule, completion: (@MainActor @Sendable (Bool) -> Void)? = nil) {
+    /// `completion` always arrives asynchronously, on the main actor: with
+    /// nil if it launched (or was running already), or why not.
+    func launch(_ rule: AppRule, completion: (@MainActor @Sendable (LaunchFailure?) -> Void)? = nil) {
         if rule.isExecutable || rule.runsDirectly == true {
-            let started = directPath(for: rule).map { runExecutable(at: $0, arguments: rule.arguments ?? []) } ?? false
-            Task { @MainActor in completion?(started) }
+            let failure = directPath(for: rule).map { runExecutable(at: $0, arguments: rule.arguments ?? [], name: rule.displayName) }
+                ?? LaunchFailure(reason: rule.isExecutable ? "It has no path." : "Couldn't find the program inside the app; it may not be installed.")
+            Task { @MainActor in completion?(failure) }
             return
         }
-        guard let url = appURL(for: rule) else {
-            Task { @MainActor in completion?(false) }
+        guard let url = appURL(for: rule), FileManager.default.fileExists(atPath: url.path) else {
+            Task { @MainActor in completion?(LaunchFailure(reason: "It isn't installed, or has moved.")) }
             return
         }
         let config = NSWorkspace.OpenConfiguration()
         config.activates = false
         config.arguments = rule.arguments ?? []
         NSWorkspace.shared.openApplication(at: url, configuration: config) { _, error in
-            let succeeded = error == nil
-            Task { @MainActor in completion?(succeeded) }
+            let failure = error.map { LaunchFailure(reason: $0.localizedDescription) }
+            Task { @MainActor in completion?(failure) }
         }
     }
 
@@ -98,7 +109,10 @@ final class AppLauncherService {
         // app's binary run that way may never become an app that can be
         // asked to quit (a headless server).
         if let path = directPath(for: rule) {
-            launchedProcesses[path]?.terminate()
+            if let process = launchedProcesses[path], process.isRunning {
+                stopping.insert(process.processIdentifier)
+                process.terminate()
+            }
             for pid in Self.pids(forExecutableAt: path) {
                 kill(pid, SIGTERM)
             }
@@ -182,9 +196,9 @@ final class AppLauncherService {
         return NSWorkspace.shared.runningApplications.filter { $0.bundleURL?.path == path }
     }
 
-    /// true if it started, or was already running.
-    private func runExecutable(at path: String, arguments: [String]) -> Bool {
-        guard launchedProcesses[path]?.isRunning != true, Self.pids(forExecutableAt: path).isEmpty else { return true }
+    /// nil if it started, or was already running; otherwise why not.
+    private func runExecutable(at path: String, arguments: [String], name: String) -> LaunchFailure? {
+        guard launchedProcesses[path]?.isRunning != true, Self.pids(forExecutableAt: path).isEmpty else { return nil }
         let process = Process()
         process.executableURL = URL(fileURLWithPath: path)
         process.arguments = arguments
@@ -193,21 +207,35 @@ final class AppLauncherService {
         process.standardError = FileHandle.nullDevice
         process.terminationHandler = { [weak self] exited in
             let pid = exited.processIdentifier
+            let reason = exited.terminationReason, status = exited.terminationStatus
             Task { @MainActor in
                 guard let self else { return }
                 if self.launchedProcesses[path]?.processIdentifier == pid {
                     self.launchedProcesses[path] = nil
                 }
-                self.onExecutableExit?()
+                let askedToStop = self.stopping.remove(pid) != nil
+                self.onExecutableExit?(name, askedToStop ? nil : Self.exitProblem(reason: reason, status: status))
             }
         }
         do {
             try process.run()
             launchedProcesses[path] = process
-            return true
+            return nil
         } catch {
-            print("AppLauncherService: failed to run \(path): \(error)")
-            return false
+            return LaunchFailure(reason: error.localizedDescription)
+        }
+    }
+
+    /// What went wrong when a program we started ended, or nil if it simply
+    /// finished (or was sent the SIGTERM that quitting sends).
+    private static func exitProblem(reason: Process.TerminationReason, status: Int32) -> String? {
+        switch reason {
+        case .exit:
+            return status == 0 ? nil : "It exited with status \(status)."
+        case .uncaughtSignal:
+            return status == SIGTERM ? nil : "It was stopped by a signal (\(String(cString: strsignal(status))))."
+        @unknown default:
+            return nil
         }
     }
 

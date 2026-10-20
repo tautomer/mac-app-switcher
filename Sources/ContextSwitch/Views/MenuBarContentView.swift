@@ -59,6 +59,17 @@ struct MenuBarContentView: View {
                     .font(.caption)
                     .foregroundStyle(.secondary)
                     .lineLimit(1)
+                if let problem = appState.profilesProblem {
+                    Button {
+                        appState.openActivityLog()
+                    } label: {
+                        Label(problem, systemImage: "exclamationmark.triangle")
+                    }
+                    .buttonStyle(.plain)
+                    .font(.caption)
+                    .foregroundStyle(.orange)
+                    .help("Open the activity log to see what couldn't be read")
+                }
             }
             Spacer()
         }

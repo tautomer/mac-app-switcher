@@ -91,7 +91,7 @@ final class LocationMonitor: NSObject, ObservableObject, CLLocationManagerDelega
 
     func locationManager(_ manager: CLLocationManager, didFailWithError error: Error) {
         // Transient (e.g. no fix yet); the next region event retries.
-        print("LocationMonitor: \(error.localizedDescription)")
+        ActivityLog.shared.debug("Location: \(error.localizedDescription)")
     }
 
     func locationManager(_ manager: CLLocationManager, didEnterRegion region: CLRegion) {

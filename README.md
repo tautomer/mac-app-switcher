@@ -59,7 +59,9 @@ five minutes, so a quick unplug doesn't switch profiles.
 When several profiles match, the one with the highest priority wins. A
 profile with no conditions is the fallback. ContextSwitch waits for the
 network to settle for a few seconds before switching, so joining a network
-doesn't launch and quit apps at every step.
+doesn't launch and quit apps at every step. When you go offline it keeps
+the current profile for a minute, so a Wi-Fi reconnect doesn't quit and
+relaunch everything, and then switches to whatever matches offline.
 
 ### Apps
 
@@ -86,6 +88,19 @@ doesn't launch and quit apps at every step.
   profile is activated again.
 - Launch ContextSwitch at login (Settings ▸ General).
 
+### Notifications and the activity log
+
+- A notification tells you when the profile switches on its own and what
+  it's launching and quitting, and another when something goes wrong: an
+  app that won't launch, a script that exits with an error, profiles that
+  can't be read. Turn either kind off in Settings ▸ General.
+- The activity log records every switch and why, with the network at the
+  time and what happened to each app, so "why did Slack just quit?" has an
+  answer. Open it from Settings ▸ General, or by clicking a notification.
+  It's kept in `~/Library/Logs/ContextSwitch/ContextSwitch.log`, and also
+  goes to the system log:
+  `log stream --level debug --predicate 'subsystem == "com.contextswitch.app"'`.
+
 ## Install
 
 1. Download the zip from the [latest release](https://github.com/tautomer/mac-app-switcher/releases/latest).
@@ -104,9 +119,17 @@ Requires macOS 14 Sonoma or later.
   ContextSwitch asks for it when you add one of those. Places use region
   monitoring (geofencing), not continuous tracking. Every other condition
   works without any permission.
+- **Notifications** are asked for the first time ContextSwitch starts.
+  Without them it works the same, and the activity log still records
+  everything.
 - Nothing leaves your Mac. ContextSwitch makes no network requests, and
   your profiles are saved locally in
   `~/Library/Application Support/ContextSwitch/profiles.json`.
+- ContextSwitch never overwrites profiles it can't read. A profile saved
+  by a newer version, or mistyped by hand, is left out but kept in the file.
+  If the whole file can't be read, it's left alone. Either way, the first
+  time you change your profiles afterwards, a copy of the file is saved as
+  `profiles-unreadable-<date>.json` first.
 
 ## Command line
 

@@ -32,7 +32,9 @@ enum CommandLineInterface {
     // MARK: - Commands
 
     private static func list() -> Int32 {
-        let profiles = ProfileStore().profiles.sorted { $0.priority > $1.priority }
+        let store = ProfileStore()
+        warnAboutProblem(in: store)
+        let profiles = store.profiles.sorted { $0.priority > $1.priority }
         let snapshot = NetworkMonitor.buildSnapshot()
         let chosen = ProfileMatcher.bestMatch(for: snapshot, in: profiles)
         print(networkSummary(snapshot))
@@ -57,6 +59,7 @@ enum CommandLineInterface {
 
     private static func switchProfile(named name: String?, dryRun: Bool) -> Int32 {
         let store = ProfileStore()
+        warnAboutProblem(in: store)
         if !dryRun, let reply = forwardToRunningApp(profileName: name, profilesPath: store.fileURL.path) {
             if reply.status == ExitStatus.success { print(reply.output) } else { printError(reply.output) }
             return reply.status
@@ -85,8 +88,8 @@ enum CommandLineInterface {
         let launcher = AppLauncherService.shared
         let launches = LaunchTracker()
         let outcomes = profile.appRules.map { rule in
-            let outcome = launcher.enforce(rule.action, for: rule, dryRun: dryRun) { succeeded in
-                launches.finished(rule.displayName, succeeded: succeeded)
+            let outcome = launcher.enforce(rule.action, for: rule, dryRun: dryRun) { failure in
+                launches.finished(rule.displayName, failure: failure)
             }
             if outcome == .launched && !dryRun { launches.pending += 1 }
             return (rule, outcome)
@@ -97,9 +100,22 @@ enum CommandLineInterface {
             RunLoop.main.run(mode: .default, before: Date().addingTimeInterval(0.1))
         }
 
-        print(report(profile: profile, outcomes: outcomes, reason: reason, dryRun: dryRun))
+        let summary = report(profile: profile, outcomes: outcomes, reason: reason, dryRun: dryRun)
+        print(summary)
         if !launches.failed.isEmpty {
             printError("Couldn't launch: \(launches.failed.joined(separator: ", "))")
+        }
+        if !dryRun {
+            // The menu bar app logs its own switches; this one happened here.
+            let log = ActivityLog.shared
+            var lines = summary.components(separatedBy: "\n")
+            lines[0] = "From the command line: \(lines[0])"
+            lines.insert("  \(networkSummary(snapshot))", at: 1)
+            log.record(lines.joined(separator: "\n"))
+            for failure in launches.failed {
+                log.record("Couldn't launch \(failure)", level: .problem)
+            }
+            log.flush()
         }
         if reason != .named, profiles.contains(where: { $0.evaluate(snapshot) == nil }) {
             print("Note: some conditions couldn't be checked here — \(unknownExplanation)")
@@ -152,7 +168,13 @@ enum CommandLineInterface {
         case .fallback: because = " — the fallback, as no other profile matches"
         case .named: because = ""
         }
-        var lines = ["\(dryRun ? "Would switch" : "Switched") to “\(profile.name)”\(because)."]
+        return (["\(dryRun ? "Would switch" : "Switched") to “\(profile.name)”\(because)."]
+            + outcomeLines(outcomes, dryRun: dryRun)).joined(separator: "\n")
+    }
+
+    /// One line per app, e.g. "  ▸ launched Slack".
+    static func outcomeLines(_ outcomes: [(AppRule, EnforceOutcome)], dryRun: Bool) -> [String] {
+        var lines: [String] = []
         for (rule, outcome) in outcomes {
             let name = rule.displayName
             switch outcome {
@@ -164,7 +186,7 @@ enum CommandLineInterface {
             }
         }
         if outcomes.isEmpty { lines.append("  (no apps in this profile)") }
-        return lines.joined(separator: "\n")
+        return lines
     }
 
     static func unknownProfileMessage(_ name: String, profiles: [Profile]) -> String {
@@ -185,7 +207,7 @@ enum CommandLineInterface {
         + "and timed conditions (“for 5 min”) need watching over time. "
         + "With the menu bar app running, switching is done by it, which can check these."
 
-    private static func networkSummary(_ snapshot: NetworkSnapshot) -> String {
+    static func networkSummary(_ snapshot: NetworkSnapshot) -> String {
         guard let primary = snapshot.primary else { return "Network: offline" }
         var parts: [String] = []
         switch primary.kind {
@@ -197,6 +219,11 @@ enum CommandLineInterface {
         return "Network: " + parts.joined(separator: " · ")
     }
 
+    private static func warnAboutProblem(in store: ProfileStore) {
+        guard let problem = store.problem else { return }
+        printError("Warning: \(problem.details)\n")
+    }
+
     private static func printError(_ message: String) {
         FileHandle.standardError.write(Data((message + "\n").utf8))
     }
@@ -205,11 +232,12 @@ enum CommandLineInterface {
 @MainActor
 private final class LaunchTracker {
     var pending = 0
+    /// e.g. "OpenRGB (It isn't installed, or has moved.)"
     var failed: [String] = []
 
-    func finished(_ name: String, succeeded: Bool) {
+    func finished(_ name: String, failure: LaunchFailure?) {
         pending -= 1
-        if !succeeded { failed.append(name) }
+        if let failure { failed.append("\(name) (\(failure.reason))") }
     }
 }
 

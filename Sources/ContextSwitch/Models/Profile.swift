@@ -88,6 +88,28 @@ struct Profile: Codable, Hashable, Identifiable {
     }
 }
 
+extension Profile {
+    private enum CodingKeys: String, CodingKey {
+        case id, name, conditions, appRules, priority
+    }
+
+    /// Of the profile's own fields only the name is required, so one written
+    /// by hand, or saved before a field existed, still loads; a generated ID
+    /// is saved by `ProfileStore`. (In an extension, so the
+    /// memberwise initializer stays.) A new field should be decoded the
+    /// same way: a profile that can't be read is left out until it can.
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        self.init(
+            id: try container.decodeIfPresent(UUID.self, forKey: .id) ?? UUID(),
+            name: try container.decode(String.self, forKey: .name),
+            conditions: try container.decodeIfPresent([ConditionClause].self, forKey: .conditions) ?? [],
+            appRules: try container.decodeIfPresent([AppRule].self, forKey: .appRules) ?? [],
+            priority: try container.decodeIfPresent(Int.self, forKey: .priority) ?? 0
+        )
+    }
+}
+
 extension Array where Element == Profile {
     /// Looks a profile up by name, ignoring case and accents. If names
     /// repeat, the highest-priority one wins.

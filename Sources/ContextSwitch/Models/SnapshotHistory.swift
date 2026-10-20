@@ -31,11 +31,26 @@ struct SnapshotHistory {
     }
 
     /// Since when `condition` has been `value` without a break. `now` if the
-    /// latest snapshot disagrees: then it has only just changed.
+    /// latest snapshot disagrees: then it has only just changed. Callers
+    /// pass a value the current snapshot has.
     func since(_ condition: NetworkCondition, was value: Bool, at now: Date) -> Date {
+        since(at: now) { condition.evaluate($0) == value }
+    }
+
+    /// Since when the Mac has been offline without a break; `now` if the
+    /// latest snapshot was online.
+    func offlineSince(at now: Date) -> Date {
+        since(at: now) { !$0.isOnline }
+    }
+
+    private func since(at now: Date, while holds: (NetworkSnapshot) -> Bool) -> Date {
+        // Nothing recorded yet: things are as they were found at launch, which
+        // counts as long-standing (see `record`). Counting from `now` would
+        // restart every timer at each check.
+        guard !entries.isEmpty else { return .distantPast }
         var since = now
         for entry in entries.reversed() {
-            guard condition.evaluate(entry.snapshot) == value else { break }
+            guard holds(entry.snapshot) else { break }
             since = entry.since
         }
         return since

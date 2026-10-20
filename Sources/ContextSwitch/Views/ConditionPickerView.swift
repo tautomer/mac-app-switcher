@@ -183,7 +183,7 @@ struct ConditionPickerView: View {
             hint("Matches when the network assigns this DNS search domain — common on office networks. A VPN can assign one too.")
 
         case .place:
-            TextField("Name", text: $placeName, prompt: Text("e.g. Home"))
+            TextField("Name", text: $placeName, prompt: Text("Optional, e.g. Home"))
             TextField("Latitude", text: $latitude)
             TextField("Longitude", text: $longitude)
             TextField("Radius (m)", text: $radius)
@@ -367,10 +367,10 @@ struct ConditionPickerView: View {
             let domain = snapshot.dnsDomains.isEmpty || domainChoice == Self.other ? trimmed(customDomain) : trimmed(domainChoice)
             return domain.map { .dnsDomain($0) }
         case .place:
-            guard let name = trimmed(placeName), let lat = Double(latitude), let lon = Double(longitude),
+            guard let lat = Double(latitude), let lon = Double(longitude),
                   let r = Double(radius), (-90...90).contains(lat), (-180...180).contains(lon), r > 0
             else { return nil }
-            return .location(name: name, latitude: lat, longitude: lon, radiusMeters: r)
+            return .location(name: trimmed(placeName) ?? "", latitude: lat, longitude: lon, radiusMeters: r)
         case .usbDevice:
             guard let device = selectedUSBDevice else { return nil }
             return .usbDevice(name: device.name, vendorID: device.vendorID, productID: device.productID,

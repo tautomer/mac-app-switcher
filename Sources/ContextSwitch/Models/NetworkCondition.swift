@@ -64,7 +64,10 @@ enum NetworkCondition: Codable, Hashable, Identifiable {
         case .gatewayIP(let v): return v
         case .gatewayMAC(let v): return MACAddress.normalize(v)
         case .subnet(let v): return v
-        case .location(let name, _, _, let radius): return "\(name) (±\(Int(radius))m)"
+        case .location(let name, let lat, let lon, let radius):
+            // The name is optional; without one, the place is where it is.
+            let place = name.isEmpty ? String(format: "%.4f, %.4f", lat, lon) : name
+            return "\(place) (±\(Int(radius))m)"
         case .usbDevice(let name, _, _, _): return name
         case .display(let name, _, _, _): return name
         }

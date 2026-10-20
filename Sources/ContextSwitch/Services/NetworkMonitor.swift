@@ -23,6 +23,8 @@ final class NetworkMonitor: ObservableObject, @unchecked Sendable {
     private var dynamicStore: SCDynamicStore?
     private var usbNotifications: IONotificationPortRef?
     private var usbIterators: [io_iterator_t] = []
+    /// Main queue only. Until then `snapshot` is the `.empty` placeholder.
+    private var hasRead = false
 
     func start() {
         watchDevices()
@@ -106,7 +108,11 @@ final class NetworkMonitor: ObservableObject, @unchecked Sendable {
                 var next = snap
                 next.displays = DeviceInventory.displays()
                 next.location = self.snapshot.location
-                if next != self.snapshot {
+                // The first reading is published even if it equals the
+                // placeholder (offline, nothing plugged in): subscribers skip
+                // the placeholder and wait for a real one.
+                if next != self.snapshot || !self.hasRead {
+                    self.hasRead = true
                     self.snapshot = next
                 }
             }

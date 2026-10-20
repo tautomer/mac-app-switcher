@@ -19,7 +19,7 @@ enum LoginItemManager {
                 }
             }
         } catch {
-            print("LoginItemManager: failed to \(enabled ? "register" : "unregister"): \(error)")
+            ActivityLog.shared.record("Couldn't turn \(enabled ? "on" : "off") launch at login: \(error.localizedDescription)", level: .problem)
         }
     }
 }
