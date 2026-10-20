@@ -41,12 +41,52 @@ env:
   SELF_SIGNED_IDENTITY: ContextSwitch Self-Signed
 
 jobs:
-  # The CI workflow's tests. Nothing is signed or published unless they pass.
+  # Usually the tag is pushed along with (or after) the commit on master, so
+  # CI has already tested this exact commit. Reuse its result, waiting for it
+  # if it's still running, rather than taking another macOS runner for the
+  # same tests.
+  ci-status:
+    name: Check CI on this commit
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    permissions:
+      actions: read
+    outputs:
+      run-tests: ${{ steps.ci.outputs.run-tests }}
+    steps:
+      - id: ci
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          # Only branch pushes: a pull request's run tests a merge commit.
+          ID=$(gh run list --workflow ci.yml --commit "$GITHUB_SHA" --event push --limit 1 \
+            --json databaseId --jq '.[0].databaseId // empty')
+          CONCLUSION=
+          if [[ -n "$ID" ]]; then
+            gh run watch "$ID" --interval 15 > /dev/null || true
+            CONCLUSION=$(gh run view "$ID" --json conclusion --jq .conclusion)
+          fi
+          if [[ "$CONCLUSION" == success ]]; then
+            echo "::notice::CI passed on this commit (run $ID), so the tests aren't run again."
+            echo "run-tests=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "CI result for $GITHUB_SHA: ${CONCLUSION:-none}. Running the tests here."
+            echo "run-tests=true" >> "$GITHUB_OUTPUT"
+          fi
+
+  # The CI workflow's tests, when CI hasn't passed on this commit.
   test:
+    needs: ci-status
+    if: needs.ci-status.outputs.run-tests == 'true'
     uses: ./.github/workflows/ci.yml
 
+  # Nothing is signed or published unless the tests passed, here or in CI.
   release:
-    needs: test
+    needs: [ci-status, test]
+    if: >-
+      !cancelled() && needs.ci-status.result == 'success'
+      && (needs.test.result == 'success' || needs.test.result == 'skipped')
     runs-on: macos-26
     timeout-minutes: 45
     permissions:
@@ -198,7 +238,7 @@ jobs:
           VERSION: ${{ steps.plan.outputs.version }}
         run: |
           NAME="ContextSwitch-${VERSION:-$(git rev-parse --short HEAD)}"
-          if [[ "$MODE" != developer-id ]]; then NAME="$NAME-unnotarized"; fi
+          if [[ "$MODE" != developer-id ]]; then NAME="$NAME"; fi
           ZIP="$RUNNER_TEMP/$NAME.zip"
           ditto -c -k --keepParent "$RUNNER_TEMP/export/ContextSwitch.app" "$ZIP"
           echo "zip=$ZIP" >> "$GITHUB_OUTPUT"
