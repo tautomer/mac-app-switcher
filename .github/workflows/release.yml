@@ -1,8 +1,9 @@
 name: Release
 
 # Builds ContextSwitch.app and attaches a zip to a GitHub Release whenever a
-# version tag (v1.2.3) is pushed. Run it manually (Actions ▸ Release ▸ Run
-# workflow) to get the zip as a build artifact only.
+# version tag (v1.2.3) is pushed, once the unit tests (ci.yml) pass. Run it
+# manually (Actions ▸ Release ▸ Run workflow) to get the zip as a build
+# artifact only.
 #
 # How the app is signed depends on which repository secrets exist
 # (Settings ▸ Secrets and variables ▸ Actions):
@@ -34,15 +35,22 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: write
+  contents: read
 
 env:
   SELF_SIGNED_IDENTITY: ContextSwitch Self-Signed
 
 jobs:
+  # The CI workflow's tests. Nothing is signed or published unless they pass.
+  test:
+    uses: ./.github/workflows/ci.yml
+
   release:
+    needs: test
     runs-on: macos-26
     timeout-minutes: 45
+    permissions:
+      contents: write
     steps:
       # Actions are pinned to commit SHAs (tags can be moved), since this job
       # handles the signing secrets.
