@@ -1,5 +1,6 @@
 import SwiftUI
 import AppKit
+import CoreLocation
 
 private enum ConditionKind: String, CaseIterable, Identifiable {
     case wifi = "Wi-Fi Network"
@@ -45,6 +46,8 @@ struct ConditionPickerView: View {
     @State private var longitude = ""
     @State private var radius = "150"
     @State private var awaitingLocation = false
+    /// Why the last "Use Current Location" didn't produce a fix.
+    @State private var locationProblem: String?
     @State private var usbChoice = ""
     @State private var displayChoice = ""
     /// Record the serial number, so only this unit matches.
@@ -100,12 +103,6 @@ struct ConditionPickerView: View {
         }
         .onChange(of: snapshot.displays) { _, displays in
             if !displays.contains(where: { $0.id == displayChoice }) { displayChoice = displays.first?.id ?? "" }
-        }
-        .onChange(of: snapshot.location) { _, location in
-            guard awaitingLocation, let location else { return }
-            awaitingLocation = false
-            latitude = String(format: "%.6f", location.latitude)
-            longitude = String(format: "%.6f", location.longitude)
         }
     }
 
@@ -190,11 +187,11 @@ struct ConditionPickerView: View {
             if appState.isLocationDenied {
                 LocationAccessBanner(appState: appState, message: "Places need Location access.")
             } else {
-                Button(awaitingLocation ? "Locating…" : "Use Current Location") {
-                    awaitingLocation = true
-                    appState.requestCurrentLocation()
+                Button(awaitingLocation ? "Locating…" : "Use Current Location") { useCurrentLocation() }
+                    .disabled(awaitingLocation)
+                if let locationProblem {
+                    hint(locationProblem)
                 }
-                .disabled(awaitingLocation)
             }
 
         case .usbDevice:
@@ -255,6 +252,25 @@ struct ConditionPickerView: View {
             .font(.caption)
             .foregroundStyle(.secondary)
             .fixedSize(horizontal: false, vertical: true)
+    }
+
+    private func useCurrentLocation() {
+        awaitingLocation = true
+        locationProblem = nil
+        appState.requestCurrentLocation { result in
+            awaitingLocation = false
+            switch result {
+            case .success(let location):
+                latitude = String(format: "%.6f", location.latitude)
+                longitude = String(format: "%.6f", location.longitude)
+            case .failure(CLError.locationUnknown):
+                locationProblem = "Couldn't determine your location right now. Macs locate themselves using nearby Wi-Fi networks, so make sure Wi-Fi is on, then try again."
+            case .failure(CLError.denied):
+                locationProblem = "ContextSwitch doesn't have Location access."
+            case .failure(let error):
+                locationProblem = "Couldn't get your location: \(error.localizedDescription)"
+            }
+        }
     }
 
     private var sortedAdapters: [NetworkService] {

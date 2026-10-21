@@ -53,7 +53,7 @@ targets:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.contextswitch.app
         PRODUCT_NAME: ContextSwitch
-        MARKETING_VERSION: "0.1.1"
+        MARKETING_VERSION: "0.1.2"
         CURRENT_PROJECT_VERSION: "1"
         # Sources/ContextSwitch/AppIcon.icon — an Icon Composer document
         # (open it in Xcode ▸ Open Developer Tool ▸ Icon Composer to edit).

@@ -15,6 +15,8 @@ final class LocationMonitor: NSObject, ObservableObject, CLLocationManagerDelega
 
     private let manager = CLLocationManager()
     private var pendingRegions: [CLCircularRegion]?
+    /// Waiting on a one-shot fix; each is called once, with the fix or the error.
+    private var fixRequests: [(Result<SimpleLocation, Error>) -> Void] = []
 
     override init() {
         super.init()
@@ -33,8 +35,10 @@ final class LocationMonitor: NSObject, ObservableObject, CLLocationManagerDelega
     }
 
     /// One-shot fix, e.g. for "Use Current Location". Asks for permission
-    /// first if needed; the fix is delivered through `onLocationUpdate`.
-    func requestCurrentLocation() {
+    /// first if needed. The fix goes to `completion` — even when it equals
+    /// the last one — as well as through `onLocationUpdate`.
+    func requestCurrentLocation(_ completion: @escaping (Result<SimpleLocation, Error>) -> Void) {
+        fixRequests.append(completion)
         if isAuthorized {
             manager.requestLocation()
         } else {
@@ -82,16 +86,31 @@ final class LocationMonitor: NSObject, ObservableObject, CLLocationManagerDelega
             pendingRegions = nil
             apply(pending)
         }
+        if isAuthorized, !fixRequests.isEmpty {
+            manager.requestLocation()
+        } else if isDenied {
+            finishFixRequests(.failure(CLError(.denied)))
+        }
     }
 
     func locationManager(_ manager: CLLocationManager, didUpdateLocations locations: [CLLocation]) {
         guard let loc = locations.last else { return }
-        onLocationUpdate?(SimpleLocation(latitude: loc.coordinate.latitude, longitude: loc.coordinate.longitude))
+        let location = SimpleLocation(latitude: loc.coordinate.latitude, longitude: loc.coordinate.longitude)
+        onLocationUpdate?(location)
+        finishFixRequests(.success(location))
     }
 
     func locationManager(_ manager: CLLocationManager, didFailWithError error: Error) {
-        // Transient (e.g. no fix yet); the next region event retries.
+        // For geofences it's transient (e.g. no fix yet): the next region
+        // event retries. A one-shot request is over, though.
         ActivityLog.shared.debug("Location: \(error.localizedDescription)")
+        finishFixRequests(.failure(error))
+    }
+
+    private func finishFixRequests(_ result: Result<SimpleLocation, Error>) {
+        let requests = fixRequests
+        fixRequests = []
+        requests.forEach { $0(result) }
     }
 
     func locationManager(_ manager: CLLocationManager, didEnterRegion region: CLRegion) {

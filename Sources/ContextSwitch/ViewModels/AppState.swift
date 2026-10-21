@@ -167,9 +167,9 @@ final class AppState: ObservableObject {
         locationMonitor.requestPermission()
     }
 
-    /// One-shot fix, delivered into `snapshot.location`.
-    func requestCurrentLocation() {
-        locationMonitor.requestCurrentLocation()
+    /// One-shot fix, delivered to `completion` and into `snapshot.location`.
+    func requestCurrentLocation(_ completion: @escaping (Result<SimpleLocation, Error>) -> Void) {
+        locationMonitor.requestCurrentLocation(completion)
     }
 
     func refreshNetwork() {
