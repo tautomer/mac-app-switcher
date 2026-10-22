@@ -78,6 +78,12 @@ relaunch everything, and then switches to whatever matches offline.
 - **Start the program directly** runs the executable inside an app, as
   Terminal does. Use it for server or daemon modes that never finish
   launching as an app, which would otherwise leave the Dock icon bouncing.
+- **Relaunch it if it crashes** opens an app again a moment after it
+  crashes, while its profile keeps it running. Quitting it doesn't count,
+  even with Force Quit: ContextSwitch tells a crash by how the app ended,
+  with an error status (a Rust panic exits with 101) or a crash signal
+  such as `SIGSEGV`. It gives up after 3 crashes in 5 minutes. Like the
+  two options above, it's in the app's launch options (the terminal icon).
 - Apps are quit the normal way, like ⌘Q, so they can ask you to save your
   work. Programs started directly, scripts and tools get `SIGTERM` instead,
   which can't ask.
@@ -98,8 +104,8 @@ relaunch everything, and then switches to whatever matches offline.
 
 - A notification tells you when the profile switches on its own and what
   it's launching and quitting, and another when something goes wrong: an
-  app that won't launch, a script that exits with an error, profiles that
-  can't be read. Turn either kind off in Settings ▸ General.
+  app that won't launch or crashes, a script that exits with an error,
+  profiles that can't be read. Turn either kind off in Settings ▸ General.
 - The activity log records every switch and why, with the network at the
   time and what happened to each app, so "why did Slack just quit?" has an
   answer. Open it from Settings ▸ General, or by clicking a notification.

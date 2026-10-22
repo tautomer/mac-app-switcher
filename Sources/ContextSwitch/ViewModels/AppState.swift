@@ -44,11 +44,22 @@ final class AppState: ObservableObject {
     /// Re-checks when a timer or the wait while offline runs out: that
     /// doesn't change the snapshot, so nothing else would notice.
     private var pendingCheck: Task<Void, Never>?
+    /// So relaunching stops when something keeps crashing.
+    private var crashes = CrashHistory()
+    /// Relaunches waiting out `relaunchDelay`, by `AppRule.targetKey`. A
+    /// newer exit of the same app cancels its one.
+    private var pendingRelaunches: [String: Task<Void, Never>] = [:]
+    /// When the Mac last began to log out, restart or shut down. Apps that
+    /// end then aren't relaunched, even if they crash on the way out.
+    private var poweringOffAt: Date?
 
     /// How long the network has to stay put before we switch profiles.
     /// Joining a network goes through several intermediate states (link up,
     /// no address, DHCP…) and we don't want to launch/quit apps for each.
     private static let settleDelay: DispatchQueue.SchedulerTimeType.Stride = .seconds(3)
+    /// Between a crash and the relaunch, so a crash report can be written
+    /// and the old process is really gone.
+    private static let relaunchDelay: Duration = .seconds(2)
 
     private enum DefaultsKey {
         static let autoSwitch = "autoSwitchEnabled"
@@ -118,10 +129,22 @@ final class AppState: ObservableObject {
         .receive(on: DispatchQueue.main)
         .sink { [weak self] _ in self?.runStateRevision += 1 }
         .store(in: &cancellables)
-        launcher.onExecutableExit = { [weak self] name, problem in
-            self?.runStateRevision += 1
-            if let problem { self?.reportProblem("\(name) stopped", problem) }
-        }
+        // An app opened by hand, while the profile keeps it running. Not the
+        // launch notification: macOS doesn't post it for menu bar apps
+        // (LSUIElement), such as OmniLED.
+        NSWorkspace.shared.publisher(for: \.runningApplications)
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] _ in self?.watchExits(in: self?.activeProfile) }
+            .store(in: &cancellables)
+        workspace.publisher(for: NSWorkspace.willPowerOffNotification)
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] _ in self?.poweringOffAt = Date() }
+            .store(in: &cancellables)
+        // With the new value: this runs before activeProfile changes.
+        $activeProfile
+            .sink { [weak self] in self?.watchExits(in: $0) }
+            .store(in: &cancellables)
+        launcher.onExit = { [weak self] in self?.handleExit($0) }
         notifier.onClick = { [weak self] in self?.openActivityLog() }
 
         DistributedNotificationCenter.default()
@@ -306,6 +329,82 @@ final class AppState: ObservableObject {
         notifier.post(title: title, body: message)
     }
 
+    // MARK: - Crashes
+
+    /// Watches what `profile` keeps running, so `handleExit` hears how it
+    /// ends. (What ContextSwitch launches is watched already.)
+    private func watchExits(in profile: Profile?) {
+        for rule in profile?.appRules ?? [] where rule.effectiveAction == .launch {
+            launcher.watchForExit(rule)
+        }
+    }
+
+    /// The active profile's rule for `targetKey`, if it keeps it running.
+    private func keptRunningRule(for targetKey: String) -> AppRule? {
+        activeProfile?.appRules.first { $0.targetKey == targetKey && $0.effectiveAction == .launch }
+    }
+
+    /// Long after it began, the logout must have been cancelled: macOS
+    /// doesn't say when one is.
+    private var isPoweringOff: Bool {
+        poweringOffAt.map { Date().timeIntervalSince($0) < 120 } ?? false
+    }
+
+    /// Something ContextSwitch launched or watches has ended: reports a
+    /// crash, and relaunches it if its rule says to and the active profile
+    /// still keeps it running.
+    private func handleExit(_ exit: TargetExit) {
+        runStateRevision += 1
+        log.debug("\(exit.name) ended. \(exit.status?.description ?? "macOS didn't say how.")"
+                  + (exit.wasAskedToStop ? " We'd asked it to." : ""))
+        // Superseded: e.g. reopened by hand and quit again, or past the cap.
+        pendingRelaunches.removeValue(forKey: exit.targetKey)?.cancel()
+        guard !exit.wasAskedToStop else { return }
+        let rule = keptRunningRule(for: exit.targetKey).flatMap { $0.relaunchesOnCrash == true ? $0 : nil }
+        // So "why didn't it come back?" has an answer.
+        guard let status = exit.status else {
+            if rule != nil { log.record("\(exit.name) quit, but macOS didn't say how, so it was left closed.") }
+            return
+        }
+        guard status.isCrash else {
+            if rule != nil {
+                log.record("\(exit.name) quit, and was left closed: only crashes are relaunched. \(status.description)")
+            }
+            return
+        }
+        guard let rule else {
+            reportProblem("\(exit.name) stopped", status.description)
+            return
+        }
+        // Everything quits then, some apps by crashing on the way out.
+        guard !isPoweringOff else {
+            reportProblem("\(exit.name) stopped",
+                          "\(status.description) The Mac began to log out or shut down in the last 2 minutes, so it was left closed.")
+            return
+        }
+        guard crashes.record(rule.targetKey) else {
+            reportProblem("\(exit.name) keeps crashing",
+                          "\(status.description) That's \(CrashHistory.limit) crashes in \(Int(CrashHistory.window / 60)) minutes, "
+                          + "so ContextSwitch has stopped relaunching it for now.")
+            return
+        }
+        reportProblem("\(exit.name) stopped", "\(status.description) Relaunching it.")
+        pendingRelaunches[rule.targetKey] = Task { [weak self] in
+            try? await Task.sleep(for: Self.relaunchDelay)
+            guard !Task.isCancelled else { return }
+            self?.pendingRelaunches[rule.targetKey] = nil
+            self?.relaunch(rule.targetKey)
+        }
+    }
+
+    /// Launches a crashed app again, unless things changed while we waited.
+    private func relaunch(_ targetKey: String) {
+        guard !isPoweringOff, let rule = keptRunningRule(for: targetKey), rule.relaunchesOnCrash == true,
+              enforce(rule) == .launched
+        else { return }
+        log.record("Relaunched \(rule.displayName) after it crashed.")
+    }
+
     // MARK: - Command line
 
     /// `ContextSwitch --switch` / `--profile NAME` while the app is open: the
@@ -359,9 +458,12 @@ final class AppState: ObservableObject {
         launcher.icon(for: rule)
     }
 
-    /// For executables we can't get launch/quit notifications for.
+    /// For executables we can't get launch/quit notifications for. Also
+    /// starts watching one started outside ContextSwitch, e.g. from
+    /// Terminal, so a crash of it is relaunched too.
     func refreshRunState() {
         runStateRevision += 1
+        watchExits(in: activeProfile)
     }
 
     // MARK: - Profile CRUD (delegates to store, re-derives active profile)

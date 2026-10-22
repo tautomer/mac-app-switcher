@@ -503,16 +503,17 @@ private struct ArgumentsButton: View {
 
     var body: some View {
         let arguments = rule.arguments ?? []
-        let isSet = !arguments.isEmpty || rule.runsDirectly == true
+        let launches = !arguments.isEmpty || rule.runsDirectly == true
+            ? "Launches \(rule.runsDirectly == true ? "directly " : "")with: \(ShellWords.join(arguments))" : nil
+        let summary = [launches, rule.relaunchesOnCrash == true ? "Relaunches if it crashes" : nil].compactMap { $0 }
         Button {
             isEditing = true
         } label: {
             Image(systemName: "terminal")
-                .foregroundStyle(isSet ? AnyShapeStyle(.tint) : AnyShapeStyle(.secondary))
+                .foregroundStyle(summary.isEmpty ? AnyShapeStyle(.secondary) : AnyShapeStyle(.tint))
         }
         .buttonStyle(.borderless)
-        .help(isSet ? "Launches \(rule.runsDirectly == true ? "directly " : "")with: \(ShellWords.join(arguments))"
-                    : "Launch options")
+        .help(summary.isEmpty ? "Launch options" : summary.joined(separator: ". "))
         .popover(isPresented: $isEditing, arrowEdge: .bottom) {
             ArgumentsEditor(rule: rule) { rule = $0 }
         }
@@ -525,12 +526,14 @@ private struct ArgumentsEditor: View {
     let onSave: (AppRule) -> Void
     @State private var text: String
     @State private var runsDirectly: Bool
+    @State private var relaunchesOnCrash: Bool
 
     init(rule: AppRule, onSave: @escaping (AppRule) -> Void) {
         self.rule = rule
         self.onSave = onSave
         _text = State(initialValue: ShellWords.join(rule.arguments ?? []))
         _runsDirectly = State(initialValue: rule.runsDirectly == true)
+        _relaunchesOnCrash = State(initialValue: rule.relaunchesOnCrash == true)
     }
 
     /// nil while a quote is open.
@@ -574,6 +577,12 @@ private struct ArgumentsEditor: View {
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
             }
+            Divider()
+            Toggle("Relaunch it if it crashes", isOn: $relaunchesOnCrash)
+            Text("While this profile keeps \(rule.displayName) running, ContextSwitch opens it again a moment after it crashes — exits with an error, or is ended by a crash signal. Quitting it, even with Force Quit, doesn't count. ContextSwitch gives up after \(CrashHistory.limit) crashes in \(Int(CrashHistory.window / 60)) minutes.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
             HStack {
                 Spacer()
                 Button("Cancel") { dismiss() }
@@ -583,6 +592,7 @@ private struct ArgumentsEditor: View {
                     var updated = rule
                     updated.arguments = arguments.isEmpty ? nil : arguments
                     updated.runsDirectly = runsDirectly ? true : nil
+                    updated.relaunchesOnCrash = relaunchesOnCrash ? true : nil
                     onSave(updated)
                     dismiss()
                 }

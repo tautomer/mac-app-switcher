@@ -75,6 +75,7 @@ targets:
       - path: Sources/ContextSwitch/Services/ProfileMatcher.swift
       - path: Sources/ContextSwitch/Services/ProfileStore.swift
       - path: Sources/ContextSwitch/Services/ActivityLog.swift
+      - path: Sources/ContextSwitch/Services/ProcessExitWatcher.swift
       - path: Sources/ContextSwitch/CLI/CommandLineCommand.swift
     settings:
       base:

@@ -738,7 +738,8 @@ private let dock = NetworkConnection(
             appRules: [AppRule(bundleIdentifier: nil, path: "/usr/local/bin/sync-notes", displayName: "sync-notes", action: .launch,
                                arguments: ["--profile", "Everyday - Midnight Teal"]),
                        AppRule(bundleIdentifier: "com.yourcompany.OpenRGB", path: "/Users/me/Applications/OpenRGB.app",
-                               displayName: "OpenRGB", action: .launch, arguments: ["--server"], runsDirectly: true)]
+                               displayName: "OpenRGB", action: .launch, arguments: ["--server"], runsDirectly: true,
+                               relaunchesOnCrash: true)]
         )
         let decoded = try JSONDecoder().decode(Profile.self, from: JSONEncoder().encode(profile))
         #expect(decoded == profile)

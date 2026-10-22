@@ -17,6 +17,17 @@ struct LaunchFailure: Error {
     let reason: String
 }
 
+/// A program `AppLauncherService` launched or watches has ended.
+struct TargetExit {
+    /// The `AppRule.targetKey` it was launched or watched for.
+    let targetKey: String
+    let name: String
+    /// nil if macOS wouldn't say how it ended.
+    let status: ProcessExit?
+    /// We stopped it (programs run directly), so it's no surprise.
+    let wasAskedToStop: Bool
+}
+
 /// An app or executable found in the app folders, for the "add app" picker.
 struct InstalledItem: Identifiable {
     let url: URL
@@ -54,18 +65,37 @@ final class AppLauncherService {
         }
     }
 
-    /// Called when a launched executable exits, so the UI can refresh,
-    /// with its name and, unless it ended normally or because we quit it,
-    /// what went wrong. (App launches/quits are observed via NSWorkspace
+    /// Called when something we launched, or were asked to watch with
+    /// `watchForExit`, ends: so the UI can refresh and a crash can be told
+    /// from a quit. (App launches/quits are also observed via NSWorkspace
     /// notifications.)
-    var onExecutableExit: ((_ name: String, _ problem: String?) -> Void)?
+    var onExit: ((TargetExit) -> Void)?
 
     /// Executables we started, by path. A script shows up in the process
     /// table under its interpreter (/bin/sh, python3…), so this is the only
-    /// way to tell it's running.
+    /// way to tell it's running. Their exits come from `Process`.
     private var launchedProcesses: [String: Process] = [:]
     /// Ones we've asked to stop, so their exit isn't reported as a problem.
     private var stopping: Set<pid_t> = []
+    /// For everything else: apps, and programs someone else started.
+    private let exitWatcher = ProcessExitWatcher()
+    private var watched: [pid_t: (targetKey: String, name: String)] = [:]
+    /// The processes whose end was reported lately, newest last, so a late
+    /// launch completion doesn't report one again — that would cancel the
+    /// relaunch of a newer instance. macOS doesn't reuse PIDs that soon.
+    private var recentlyEnded: [pid_t] = []
+
+    init() {
+        exitWatcher.onExit = { [weak self] pid, status in
+            guard let self, let target = self.watched.removeValue(forKey: pid) else { return }
+            self.reportExit(of: pid, targetKey: target.targetKey, name: target.name, status: status)
+        }
+    }
+
+    private func reportExit(of pid: pid_t, targetKey: String, name: String, status: ProcessExit?) {
+        recentlyEnded = Array(recentlyEnded.suffix(63)) + [pid]
+        onExit?(TargetExit(targetKey: targetKey, name: name, status: status, wasAskedToStop: stopping.remove(pid) != nil))
+    }
 
     func isRunning(_ rule: AppRule) -> Bool {
         if !rule.isExecutable, !runningApplications(for: rule).isEmpty { return true }
@@ -84,7 +114,7 @@ final class AppLauncherService {
     /// nil if it launched (or was running already), or why not.
     func launch(_ rule: AppRule, completion: (@MainActor @Sendable (LaunchFailure?) -> Void)? = nil) {
         if rule.isExecutable || rule.runsDirectly == true {
-            let failure = directPath(for: rule).map { runExecutable(at: $0, arguments: rule.arguments ?? [], name: rule.displayName) }
+            let failure = directPath(for: rule).map { runExecutable(at: $0, for: rule) }
                 ?? LaunchFailure(reason: rule.isExecutable ? "It has no path." : "Couldn't find the program inside the app; it may not be installed.")
             Task { @MainActor in completion?(failure) }
             return
@@ -96,10 +126,41 @@ final class AppLauncherService {
         let config = NSWorkspace.OpenConfiguration()
         config.activates = false
         config.arguments = rule.arguments ?? []
-        NSWorkspace.shared.openApplication(at: url, configuration: config) { _, error in
+        NSWorkspace.shared.openApplication(at: url, configuration: config) { [weak self] app, error in
             let failure = error.map { LaunchFailure(reason: $0.localizedDescription) }
-            Task { @MainActor in completion?(failure) }
+            let pid = app?.processIdentifier
+            Task { @MainActor in
+                if let pid { self?.watchLaunched(pid, for: rule) }
+                completion?(failure)
+            }
         }
+    }
+
+    /// Watches `rule`'s running processes, so `onExit` says when and how
+    /// each ends. What we launch is watched already.
+    func watchForExit(_ rule: AppRule) {
+        var pids = rule.isExecutable ? [] : runningApplications(for: rule).map(\.processIdentifier)
+        if let path = directPath(for: rule) { pids += Self.pids(forExecutableAt: path) }
+        // Reported by Process instead.
+        let ours = Set(launchedProcesses.values.map(\.processIdentifier))
+        for pid in pids where !ours.contains(pid) {
+            watch(pid, for: rule)
+        }
+    }
+
+    private func watch(_ pid: pid_t, for rule: AppRule) {
+        guard watched[pid] == nil, exitWatcher.watch(pid) else { return }
+        watched[pid] = (rule.targetKey, rule.displayName)
+    }
+
+    /// `watch`, for an app we just opened: one that's gone already (it
+    /// crashed on the way up) is reported as ended too, though how it ended
+    /// can't be told any more.
+    private func watchLaunched(_ pid: pid_t, for rule: AppRule) {
+        watch(pid, for: rule)
+        // pid > 0: kill(2) takes 0 and -1 to mean groups of processes.
+        guard pid > 0, watched[pid] == nil, !recentlyEnded.contains(pid), kill(pid, 0) != 0, errno == ESRCH else { return }
+        reportExit(of: pid, targetKey: rule.targetKey, name: rule.displayName, status: nil)
     }
 
     /// Sends apps a normal Quit, so they can still show "save changes?"
@@ -114,6 +175,7 @@ final class AppLauncherService {
                 process.terminate()
             }
             for pid in Self.pids(forExecutableAt: path) {
+                if watched[pid] != nil { stopping.insert(pid) }
                 kill(pid, SIGTERM)
             }
             return
@@ -197,24 +259,24 @@ final class AppLauncherService {
     }
 
     /// nil if it started, or was already running; otherwise why not.
-    private func runExecutable(at path: String, arguments: [String], name: String) -> LaunchFailure? {
+    private func runExecutable(at path: String, for rule: AppRule) -> LaunchFailure? {
         guard launchedProcesses[path]?.isRunning != true, Self.pids(forExecutableAt: path).isEmpty else { return nil }
         let process = Process()
         process.executableURL = URL(fileURLWithPath: path)
-        process.arguments = arguments
+        process.arguments = rule.arguments ?? []
         process.currentDirectoryURL = FileManager.default.homeDirectoryForCurrentUser
         process.standardOutput = FileHandle.nullDevice
         process.standardError = FileHandle.nullDevice
+        let targetKey = rule.targetKey, name = rule.displayName
         process.terminationHandler = { [weak self] exited in
             let pid = exited.processIdentifier
-            let reason = exited.terminationReason, status = exited.terminationStatus
+            let status = ProcessExit(exited.terminationReason, status: exited.terminationStatus)
             Task { @MainActor in
                 guard let self else { return }
                 if self.launchedProcesses[path]?.processIdentifier == pid {
                     self.launchedProcesses[path] = nil
                 }
-                let askedToStop = self.stopping.remove(pid) != nil
-                self.onExecutableExit?(name, askedToStop ? nil : Self.exitProblem(reason: reason, status: status))
+                self.reportExit(of: pid, targetKey: targetKey, name: name, status: status)
             }
         }
         do {
@@ -223,19 +285,6 @@ final class AppLauncherService {
             return nil
         } catch {
             return LaunchFailure(reason: error.localizedDescription)
-        }
-    }
-
-    /// What went wrong when a program we started ended, or nil if it simply
-    /// finished (or was sent the SIGTERM that quitting sends).
-    private static func exitProblem(reason: Process.TerminationReason, status: Int32) -> String? {
-        switch reason {
-        case .exit:
-            return status == 0 ? nil : "It exited with status \(status)."
-        case .uncaughtSignal:
-            return status == SIGTERM ? nil : "It was stopped by a signal (\(String(cString: strsignal(status))))."
-        @unknown default:
-            return nil
         }
     }
 

@@ -23,6 +23,9 @@ struct AppRule: Codable, Hashable, Identifiable {
     /// `OpenRGB --server`) that never finish launching as an app, so the
     /// Dock icon would bounce for good.
     var runsDirectly: Bool?
+    /// Launch it again if it crashes while its profile keeps it running —
+    /// but not if it's quit, even with Force Quit (see `ProcessExit.isCrash`).
+    var relaunchesOnCrash: Bool?
 
     /// Session-only manual override set from the menu bar popover. Not
     /// persisted — it resets whenever the profile re-activates.
