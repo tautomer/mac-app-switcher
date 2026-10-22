@@ -37,6 +37,23 @@ struct SnapshotHistory {
         since(at: now) { condition.evaluate($0) == value }
     }
 
+    /// When `condition` stopped being `value`, if it was until things became
+    /// as they are now; `now` if the latest snapshot still has it. nil if
+    /// it wasn't seen being `value` just before: it was unknown then, or
+    /// things have been this way since launch. Callers pass the opposite
+    /// of the value the current snapshot has.
+    func stopped(_ condition: NetworkCondition, being value: Bool, at now: Date) -> Date? {
+        var stopped = now
+        for entry in entries.reversed() {
+            switch condition.evaluate(entry.snapshot) {
+            case value?: return stopped
+            case nil: return nil
+            default: stopped = entry.since
+            }
+        }
+        return nil
+    }
+
     /// Since when the Mac has been offline without a break; `now` if the
     /// latest snapshot was online.
     func offlineSince(at now: Date) -> Date {

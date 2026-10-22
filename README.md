@@ -53,8 +53,14 @@ For example:
 | Display | A display of this model is connected, or only this unit (by serial number). |
 
 Conditions combine with **and**, **or** and **not**, and any of them can be
-timed: "dock *not* connected **for 5 min**" only counts once it has held for
-five minutes, so a quick unplug doesn't switch profiles.
+timed, so a quick unplug doesn't switch profiles, in one of two ways:
+
+- **For a while:** "dock *not* connected **for 5 min**" only counts once it
+  has held for five minutes.
+- **With grace:** "dock connected **with 5 min grace**" counts at once, and
+  keeps counting for five minutes after the dock goes, so restarting it
+  doesn't switch away. This one suits a profile whose way out is the
+  fallback, which has no conditions to put a timer on.
 
 When several profiles match, the one with the highest priority wins. A
 profile with no conditions is the fallback. ContextSwitch waits for the

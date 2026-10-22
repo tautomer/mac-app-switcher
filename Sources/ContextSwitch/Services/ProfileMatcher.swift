@@ -29,9 +29,40 @@ enum ProfileMatcher {
     /// until the timer runs out (or things change), so unplugging the dock
     /// for a few minutes doesn't pass through an in-between profile.
     /// `pending` is the first such profile, to show in the menu; `checkAt`
-    /// is when to decide again even if nothing changes.
+    /// is when to decide again even if nothing changes. A clause in its
+    /// grace (the dock being restarted) keeps its profile matching until
+    /// the grace runs out; then `pending` is where it'd switch.
     static func autoSwitch(for snapshot: NetworkSnapshot, in profiles: [Profile], current: Profile?,
                            history: SnapshotHistory, at now: Date)
+        -> (profile: Profile?, pending: PendingMatch?, checkAt: Date?) {
+        let decision = switchOrWait(for: snapshot, in: profiles, current: current, history: history, at: now)
+        // "If nothing changes": this snapshot from now on, even if it hasn't
+        // settled yet — else a later check would count its change from then.
+        var unchanged = history
+        unchanged.record(snapshot, at: now)
+        let graceEnds = Set(profiles.flatMap { profile in
+            profile.conditions.compactMap { $0.graceEnds(snapshot, history: unchanged, at: now) }
+        })
+        .filter { $0 > now }
+        .sorted()
+        guard let graceEnd = graceEnds.first, decision.checkAt.map({ graceEnd < $0 }) ?? true else { return decision }
+        // What it'll decide then, by the same rules, for the menu to show —
+        // past any grace that runs out without changing the profile.
+        var forecast: PendingMatch?
+        for end in graceEnds {
+            if let forecast, forecast.at <= end { break }
+            let then = switchOrWait(for: snapshot, in: profiles, current: decision.profile, history: unchanged, at: end)
+            if then.profile?.id != decision.profile?.id {
+                forecast = then.profile.map { PendingMatch(profile: $0, at: end) }
+                break
+            }
+            forecast = forecast ?? then.pending
+        }
+        return (decision.profile, forecast, graceEnd)
+    }
+
+    private static func switchOrWait(for snapshot: NetworkSnapshot, in profiles: [Profile], current: Profile?,
+                                     history: SnapshotHistory, at now: Date)
         -> (profile: Profile?, pending: PendingMatch?, checkAt: Date?) {
         let best = bestMatch(for: snapshot, in: profiles, history: history, at: now)
         let pending = profiles

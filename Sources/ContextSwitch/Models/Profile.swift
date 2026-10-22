@@ -47,9 +47,21 @@ struct Profile: Codable, Hashable, Identifiable {
     func matchesFrom(_ snapshot: NetworkSnapshot, history: SnapshotHistory?, at now: Date) -> Date? {
         conditionGroups.compactMap { group -> Date? in
             let times = group.map { $0.holdsFrom(snapshot, history: history, at: now) }
-            return times.contains(nil) ? nil : times.compactMap { $0 }.max()
+            guard !times.contains(nil), let from = times.compactMap({ $0 }).max() else { return nil }
+            // A clause counting on its grace has to still count by then.
+            let lasts = group.allSatisfy { clause in
+                clause.graceEnds(snapshot, history: history, at: now).map { $0 > from } ?? true
+            }
+            return lasts ? from : nil
         }
         .min()
+    }
+
+    /// The first time, if nothing changes, that a clause still counting in
+    /// its grace (see `ConditionClause.grace`) stops — when the profile may
+    /// stop matching. nil if none is counting that way.
+    func graceEnds(_ snapshot: NetworkSnapshot, history: SnapshotHistory?, at now: Date) -> Date? {
+        conditions.compactMap { $0.graceEnds(snapshot, history: history, at: now) }.filter { $0 > now }.min()
     }
 
     /// e.g. `(Wi-Fi Network “Home” and not Ethernet Adapter “Dock”) or DNS Domain “corp.com”`

@@ -185,10 +185,76 @@ private let dock = NetworkConnection(
         #expect(history.since(tbDock, was: true, at: now) == now)
     }
 
+    @Test func graceKeepsCountingForAWhileAfterItStops() {
+        let dockedWithGrace = ConditionClause(tbDock, grace: 5 * 60)
+        let history = unpluggedAtTen
+        #expect(dockedWithGrace.evaluate(undocked, history: history, at: minutes(12)) == true)
+        #expect(dockedWithGrace.holdsFrom(undocked, history: history, at: minutes(12)) == .distantPast)
+        #expect(dockedWithGrace.graceEnds(undocked, history: history, at: minutes(12)) == minutes(15))
+        #expect(dockedWithGrace.evaluate(undocked, history: history, at: minutes(15)) == false)
+        #expect(dockedWithGrace.holdsFrom(undocked, history: history, at: minutes(15)) == nil)
+        #expect(dockedWithGrace.summary == "USB Device “40AY” with 5 min grace")
+    }
+
+    @Test func graceDoesNotCoverWhatWasFoundAtLaunch() {
+        var history = SnapshotHistory()
+        history.record(undocked, at: t0)
+        #expect(ConditionClause(tbDock, grace: 5 * 60).evaluate(undocked, history: history, at: t0 + 1) == false)
+    }
+
+    @Test func graceNeedsToHaveSeenItHold() {
+        // No Location access at first, so the Wi-Fi name is unknown; then it
+        // reads as another network. "Office" never held, so no grace.
+        var redacted = wifi
+        redacted.ssid = nil
+        var history = SnapshotHistory()
+        history.record(NetworkSnapshot(connections: [redacted]), at: t0)
+        history.record(undocked, at: minutes(1))
+        let office = ConditionClause(.ssid("Office"), grace: 5 * 60)
+        #expect(office.evaluate(undocked, history: history, at: minutes(2)) == false)
+        #expect(office.graceEnds(undocked, history: history, at: minutes(2)) == nil)
+    }
+
+    @Test func graceIsSavedSoOlderVersionsKeepItAsIs() throws {
+        /// How versions before grace read a clause's timer.
+        struct OlderClause: Decodable { var duration: TimeInterval? }
+        let grace = try JSONEncoder().encode(ConditionClause(tbDock, grace: 300))
+        #expect(throws: DecodingError.self) { try JSONDecoder().decode(OlderClause.self, from: grace) }
+        let held = try JSONEncoder().encode(ConditionClause(tbDock, duration: 300))
+        #expect(try JSONDecoder().decode(OlderClause.self, from: held).duration == 300)
+    }
+
+    @Test func readsGraceAsEarlierBuildsSavedIt() throws {
+        // A top-level "grace", before it moved under "duration".
+        let earlier = Data(#"{"condition": {"ssid": {"_0": "Office"}}, "grace": 300}"#.utf8)
+        let clause = try JSONDecoder().decode(ConditionClause.self, from: earlier)
+        #expect(clause.timer == .graceFor(300))
+        let saved = try JSONSerialization.jsonObject(with: JSONEncoder().encode(clause)) as? [String: Any]
+        #expect(saved?["grace"] == nil)
+        #expect((saved?["duration"] as? [String: Any])?["grace"] as? Double == 300)
+    }
+
+    @Test func withoutHistoryGraceCannotBeTold() {
+        let clause = ConditionClause(tbDock, grace: 5 * 60)
+        #expect(clause.evaluate(undocked) == nil)
+        #expect(clause.evaluate(docked) == true)
+    }
+
+    @Test func aClauseHasOneKindOfTimerAtATime() {
+        var clause = ConditionClause(tbDock, duration: 60)
+        clause.timer = .graceFor(300)
+        #expect(clause.duration == nil && clause.grace == 300)
+        clause.timer = .holdsFor(120)
+        #expect(clause.duration == 120 && clause.grace == nil)
+        clause.timer = nil
+        #expect(clause.duration == nil && clause.grace == nil)
+    }
+
     @Test func roundTripsDuration() throws {
-        let clause = ConditionClause(tbDock, isNegated: true, duration: 300)
-        let decoded = try JSONDecoder().decode(ConditionClause.self, from: JSONEncoder().encode(clause))
-        #expect(decoded == clause)
+        for clause in [ConditionClause(tbDock, isNegated: true, duration: 300), ConditionClause(tbDock, grace: 300)] {
+            let decoded = try JSONDecoder().decode(ConditionClause.self, from: JSONEncoder().encode(clause))
+            #expect(decoded == clause)
+        }
         #expect(ConditionClause.label(forDuration: 90 * 60) == "1 h 30 min")
         #expect(ConditionClause.label(forDuration: 3600) == "1 hour")
     }
@@ -257,6 +323,119 @@ private let dock = NetworkConnection(
                                                history: history, at: minutes(11))
         #expect(result.profile?.name == "Default")
         #expect(result.pending?.profile.name == "On Site")
+    }
+}
+
+/// The office profile from grace's motivation: on the dock at the desk,
+/// with the fallback everywhere else, which can't carry a "not docked for
+/// 5 min" timer. Restarting the dock shouldn't switch; docking should, at once.
+@Suite struct GraceTests {
+    let tbDock = NetworkCondition.usbDevice(name: "40AY", vendorID: 6127, productID: 12457, serialNumber: "1S40AY0090USZVV1ESKM")
+    let docked = NetworkSnapshot(connections: [dock], usbDevices: [
+        USBDevice(name: "40AY", manufacturer: "Lenovo", vendorID: 6127, productID: 12457, serialNumber: "1S40AY0090USZVV1ESKM"),
+    ])
+    let undocked = NetworkSnapshot(connections: [wifi])
+    let t0 = Date(timeIntervalSinceReferenceDate: 800_000_000)
+
+    var home: Profile { Profile(name: "Home") }
+    var office: Profile { Profile(name: "A116", conditions: [ConditionClause(tbDock, grace: 5 * 60)], priority: 5) }
+
+    private func minutes(_ m: Double) -> Date { t0 + m * 60 }
+
+    @Test func staysThroughAShortBreak() {
+        var history = SnapshotHistory()
+        history.record(docked, at: t0)
+        history.record(undocked, at: minutes(10))
+
+        let during = ProfileMatcher.autoSwitch(for: undocked, in: [home, office], current: office, history: history, at: minutes(12))
+        #expect(during.profile?.name == "A116")
+        #expect(during.pending?.profile.name == "Home")
+        #expect(during.pending?.at == minutes(15))
+        #expect(during.checkAt == minutes(15))
+
+        let after = ProfileMatcher.autoSwitch(for: undocked, in: [home, office], current: office, history: history, at: minutes(15))
+        #expect(after.profile?.name == "Home")
+        #expect(after.pending == nil)
+        #expect(after.checkAt == nil)
+    }
+
+    @Test func dockingAgainInTimeKeepsIt() {
+        var history = SnapshotHistory()
+        history.record(docked, at: t0)
+        history.record(undocked, at: minutes(10))
+        history.record(docked, at: minutes(13))
+        let back = ProfileMatcher.autoSwitch(for: docked, in: [home, office], current: office, history: history, at: minutes(13))
+        #expect(back.profile?.name == "A116")
+        #expect(back.pending == nil)
+        #expect(back.checkAt == nil)
+    }
+
+    @Test func aGroupWhoseGraceRunsOutFirstDoesNotHoldUpASwitch() {
+        // Undocking while joining Home-WiFi: "docked with grace and on
+        // Home-WiFi for 10 min" can't match before the grace ends, so it
+        // mustn't keep A116 in place of Home, which matches now.
+        let both = Profile(name: "Both", conditions: [ConditionClause(tbDock, grace: 5 * 60),
+                                                      ConditionClause(.ssid("Home-WiFi"), duration: 10 * 60)], priority: 9)
+        let homeWiFi = Profile(name: "Home Wi-Fi", conditions: [ConditionClause(.ssid("Home-WiFi"))], priority: 1)
+        let plainOffice = Profile(name: "A116", conditions: [ConditionClause(tbDock)], priority: 5)
+        var history = SnapshotHistory()
+        history.record(docked, at: t0)
+        history.record(undocked, at: minutes(10))
+        let result = ProfileMatcher.autoSwitch(for: undocked, in: [both, plainOffice, homeWiFi], current: plainOffice,
+                                               history: history, at: minutes(10))
+        #expect(result.profile?.name == "Home Wi-Fi")
+        #expect(result.pending == nil)
+    }
+
+    @Test func theMenuShowsWhatItWillReallyDo() {
+        // Once the grace ends, the fallback would match, but "On Site"
+        // outranks it and is only waiting on its timer: A116 stays until then.
+        let onSite = Profile(name: "On Site", conditions: [ConditionClause(tbDock, isNegated: true, duration: 10 * 60)], priority: 3)
+        var history = SnapshotHistory()
+        history.record(docked, at: t0)
+        history.record(undocked, at: minutes(10))
+        let result = ProfileMatcher.autoSwitch(for: undocked, in: [home, office, onSite], current: office,
+                                               history: history, at: minutes(11))
+        #expect(result.profile?.name == "A116")
+        #expect(result.pending?.profile.name == "On Site")
+        #expect(result.pending?.at == minutes(20))
+        #expect(result.checkAt == minutes(15))
+    }
+
+    @Test func theMenuLooksPastAGraceThatChangesNothing() {
+        // Two ways to be at the desk, each with its own grace. The first to
+        // run out leaves the other, so the switch comes when that one does.
+        let desk = Profile(name: "A116", conditions: [
+            ConditionClause(tbDock, grace: 60),
+            ConditionClause(.ethernetAdapter("USB 10/100/1000 LAN"), connector: .or, grace: 5 * 60),
+        ], priority: 5)
+        var history = SnapshotHistory()
+        history.record(docked, at: t0)
+        history.record(undocked, at: minutes(10))
+        let result = ProfileMatcher.autoSwitch(for: undocked, in: [home, desk], current: desk, history: history, at: minutes(10.5))
+        #expect(result.profile?.name == "A116")
+        #expect(result.pending?.profile.name == "Home")
+        #expect(result.pending?.at == minutes(15))
+        #expect(result.checkAt == minutes(11))
+    }
+
+    @Test func aChangeNotYetSettledCountsFromNowInTheForecast() {
+        // Undocked a moment ago: the history only has the docked snapshot.
+        var history = SnapshotHistory()
+        history.record(docked, at: t0)
+        let result = ProfileMatcher.autoSwitch(for: undocked, in: [home, office], current: office, history: history, at: minutes(10))
+        #expect(result.profile?.name == "A116")
+        #expect(result.pending?.profile.name == "Home")
+        #expect(result.pending?.at == minutes(15))
+        #expect(result.checkAt == minutes(15))
+    }
+
+    @Test func dockingSwitchesRightAway() {
+        var history = SnapshotHistory()
+        history.record(undocked, at: t0)
+        history.record(docked, at: minutes(10))
+        let result = ProfileMatcher.autoSwitch(for: docked, in: [home, office], current: home, history: history, at: minutes(10))
+        #expect(result.profile?.name == "A116")
     }
 }
 

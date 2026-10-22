@@ -221,7 +221,7 @@ private struct ProfileDetailEditor: View {
                         ConditionRow(
                             clause: clause,
                             isNegated: negationBinding(for: clause.id),
-                            duration: durationBinding(for: clause.id),
+                            timer: timerBinding(for: clause.id),
                             snapshot: appState.snapshot,
                             history: appState.history,
                             onRemove: { profile.removeCondition(id: clause.id) }
@@ -275,7 +275,7 @@ private struct ProfileDetailEditor: View {
             }
 
             Group {
-                if profile.conditions.contains(where: { $0.duration != nil }) {
+                if profile.conditions.contains(where: { $0.timer != nil }) {
                     TimelineView(.periodic(from: .now, by: 1)) { context in matchStatus(at: context.date) }
                 } else {
                     matchStatus(at: Date())
@@ -295,8 +295,14 @@ private struct ProfileDetailEditor: View {
         } else {
             switch profile.evaluate(snapshot, history: history, at: now) {
             case true?:
-                Label("Matches right now", systemImage: "checkmark.circle.fill")
-                    .foregroundStyle(.green)
+                if let ends = profile.graceEnds(snapshot, history: history, at: now) {
+                    Label("Matches for now — a condition's grace ends in \(countdownLabel(ends.timeIntervalSince(now))) unless it comes back",
+                          systemImage: "hourglass")
+                        .foregroundStyle(.orange)
+                } else {
+                    Label("Matches right now", systemImage: "checkmark.circle.fill")
+                        .foregroundStyle(.green)
+                }
             case false?:
                 Label("Doesn't match right now", systemImage: "xmark.circle")
                     .foregroundStyle(.secondary)
@@ -318,12 +324,12 @@ private struct ProfileDetailEditor: View {
         )
     }
 
-    private func durationBinding(for id: ConditionClause.ID) -> Binding<TimeInterval?> {
+    private func timerBinding(for id: ConditionClause.ID) -> Binding<ConditionClause.Timer?> {
         Binding(
-            get: { profile.conditions.first { $0.id == id }?.duration },
+            get: { profile.conditions.first { $0.id == id }?.timer },
             set: { newValue in
                 if let index = profile.conditions.firstIndex(where: { $0.id == id }) {
-                    profile.conditions[index].duration = newValue
+                    profile.conditions[index].timer = newValue
                 }
             }
         )
@@ -335,7 +341,7 @@ private struct ProfileDetailEditor: View {
 private struct ConditionRow: View {
     let clause: ConditionClause
     @Binding var isNegated: Bool
-    @Binding var duration: TimeInterval?
+    @Binding var timer: ConditionClause.Timer?
     let snapshot: NetworkSnapshot
     let history: SnapshotHistory
     let onRemove: () -> Void
@@ -381,8 +387,8 @@ private struct ConditionRow: View {
                 .lineLimit(1)
                 .truncationMode(.middle)
             Spacer(minLength: 8)
-            durationMenu
-            if duration == nil {
+            timerMenu
+            if timer == nil {
                 statusIcon(at: Date())
             } else {
                 // Counts down.
@@ -392,26 +398,27 @@ private struct ConditionRow: View {
         }
     }
 
-    private var durationMenu: some View {
+    private var timerMenu: some View {
         Menu {
-            Picker("Duration", selection: $duration) {
-                Text("Right away").tag(TimeInterval?.none)
+            Picker("Timer", selection: $timer) {
+                Text("Right away").tag(ConditionClause.Timer?.none)
                 Section("Only once it's held for") {
-                    ForEach(Self.presetMinutes, id: \.self) { minutes in
-                        Text(ConditionClause.label(forDuration: minutes * 60)).tag(TimeInterval?(minutes * 60))
+                    ForEach(Self.choices(adding: clause.duration), id: \.self) { seconds in
+                        Text(ConditionClause.label(forDuration: seconds)).tag(ConditionClause.Timer?(.holdsFor(seconds)))
                     }
-                    // A duration set in profiles.json by hand.
-                    if let duration, !Self.presetMinutes.contains(duration / 60) {
-                        Text(ConditionClause.label(forDuration: duration)).tag(TimeInterval?(duration))
+                }
+                Section("Keep counting after it stops, for") {
+                    ForEach(Self.choices(adding: clause.grace), id: \.self) { seconds in
+                        Text(ConditionClause.label(forDuration: seconds)).tag(ConditionClause.Timer?(.graceFor(seconds)))
                     }
                 }
             }
             .pickerStyle(.inline)
             .labelsHidden()
         } label: {
-            if let duration {
+            if let timer {
                 HStack(spacing: 3) {
-                    Text("for \(ConditionClause.label(forDuration: duration))")
+                    Text(Self.label(for: timer))
                     Image(systemName: "chevron.down")
                         .font(.caption2.weight(.semibold))
                 }
@@ -427,8 +434,31 @@ private struct ConditionRow: View {
         .buttonStyle(.plain)
         .menuIndicator(.hidden)
         .fixedSize()
-        .help(duration.map { "Counts once this has held for \(ConditionClause.label(forDuration: $0))" }
-              ?? "Add a timer: count this only once it has held for a while — e.g. a dock unplugged for 5 minutes, not just for a quick chat")
+        .help(timer.map(Self.explanation(of:))
+              ?? "Add a timer: count this only once it has held for a while — e.g. a dock unplugged for 5 minutes, not just for a quick chat — or keep counting it for a while after it stops, so restarting the dock doesn't switch")
+    }
+
+    /// The presets, in seconds, and `custom` if it was set in profiles.json by hand.
+    private static func choices(adding custom: TimeInterval?) -> [TimeInterval] {
+        let presets = presetMinutes.map { $0 * 60 }
+        guard let custom, !presets.contains(custom) else { return presets }
+        return presets + [custom]
+    }
+
+    private static func label(for timer: ConditionClause.Timer) -> String {
+        switch timer {
+        case .holdsFor(let seconds): return "for \(ConditionClause.label(forDuration: seconds))"
+        case .graceFor(let seconds): return "\(ConditionClause.label(forDuration: seconds)) grace"
+        }
+    }
+
+    private static func explanation(of timer: ConditionClause.Timer) -> String {
+        switch timer {
+        case .holdsFor(let seconds):
+            return "Counts once this has held for \(ConditionClause.label(forDuration: seconds))"
+        case .graceFor(let seconds):
+            return "Keeps counting for \(ConditionClause.label(forDuration: seconds)) after this stops, so a short break — restarting the dock — doesn't switch profiles"
+        }
     }
 
     @ViewBuilder
@@ -437,6 +467,10 @@ private struct ConditionRow: View {
             Image(systemName: "hourglass")
                 .foregroundStyle(.tint)
                 .help("Counts in \(countdownLabel(from.timeIntervalSince(now))) if nothing changes")
+        } else if let ends = clause.graceEnds(snapshot, history: history, at: now), ends > now {
+            Image(systemName: "hourglass")
+                .foregroundStyle(.orange)
+                .help("Not true right now, but still counts for \(countdownLabel(ends.timeIntervalSince(now))) unless it comes back")
         } else {
             switch clause.evaluate(snapshot, history: history, at: now) {
             case true?:
