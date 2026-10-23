@@ -31,7 +31,8 @@ final class AppState: ObservableObject {
     /// Whether macOS lets us post notifications; nil until the user's been asked.
     @Published private(set) var notificationsAllowed: Bool?
 
-    private let store = ProfileStore()
+    /// Loaded holding the lock, so not in the middle of an import from the command line.
+    private let store = ProfileStore.whileLocked { ProfileStore() }
     private let networkMonitor = NetworkMonitor()
     private let locationMonitor = LocationMonitor()
     private let launcher = AppLauncherService.shared
@@ -150,6 +151,12 @@ final class AppState: ObservableObject {
         DistributedNotificationCenter.default()
             .publisher(for: RemoteCommand.requestName)
             .compactMap { RemoteCommand.Request(userInfo: $0.userInfo) }
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] in self?.handle($0) }
+            .store(in: &cancellables)
+        DistributedNotificationCenter.default()
+            .publisher(for: RemoteCommand.importRequestName)
+            .compactMap { RemoteCommand.ImportRequest(userInfo: $0.userInfo) }
             .receive(on: DispatchQueue.main)
             .sink { [weak self] in self?.handle($0) }
             .store(in: &cancellables)
@@ -412,7 +419,7 @@ final class AppState: ObservableObject {
     /// the reply tells the command line what happened. Auto-switch is left
     /// as it is (unlike picking a profile from the menu).
     private func handle(_ request: RemoteCommand.Request) {
-        guard request.profilesPath == store.fileURL.path else { return }
+        guard store.isProfilesFile(request.profilesPath) else { return ignore(request.id) }
         let reply: RemoteCommand.Reply
         if let name = request.profileName {
             if let profile = profiles.profile(named: name) {
@@ -434,6 +441,42 @@ final class AppState: ObservableObject {
                           output: CLI.noMatchMessage(snapshot: snapshot, profiles: profiles, history: history))
         }
         RemoteCommand.post(RemoteCommand.replyName, userInfo: reply.userInfo)
+    }
+
+    /// `ContextSwitch --import FILE` while the app is open: imported here,
+    /// as saving would otherwise write over profiles changed under it.
+    private func handle(_ request: RemoteCommand.ImportRequest) {
+        guard store.isProfilesFile(request.profilesPath) else { return ignore(request.id) }
+        // The command line has given up on it, or is about to.
+        guard !request.isExpired(at: Date()) else {
+            log.record("An import of \(request.fileName) from the command line came too late, so it wasn't carried out.")
+            let reply = RemoteCommand.Reply(id: request.id, status: CLI.ExitStatus.tryAgain,
+                                            output: "ContextSwitch was busy and got the import too late, so nothing was imported. Try again.")
+            return RemoteCommand.post(RemoteCommand.replyName, userInfo: reply.userInfo)
+        }
+        // So the command line knows it may happen, if the answer is slow.
+        RemoteCommand.post(RemoteCommand.replyName, userInfo: RemoteCommand.Reply(accepting: request.id).userInfo)
+        let reply: RemoteCommand.Reply
+        switch ImportCommand.plan(request.contents, from: request.fileName, into: profiles, onMatch: request.onMatch) {
+        case .fail(let status, let message):
+            reply = .init(id: request.id, status: status, output: message)
+        case .importing(let imported, let replacing):
+            let (merge, saveError) = applyImport(imported, from: request.fileName, replacing: replacing, fromCommandLine: true)
+            var output = ImportCommand.report(merge, of: imported, from: request.fileName, dryRun: false)
+            if let saveError {
+                output += "\nBut they couldn't be saved: \(saveError.localizedDescription) "
+                    + "ContextSwitch has them, and saves them with the next change to your profiles."
+            }
+            reply = .init(id: request.id, status: saveError == nil ? CLI.ExitStatus.success : CLI.ExitStatus.cannotWrite,
+                          output: output)
+        }
+        RemoteCommand.post(RemoteCommand.replyName, userInfo: reply.userInfo)
+    }
+
+    /// For a command on other profiles (a CONTEXTSWITCH_PROFILES sandbox,
+    /// say), so the command line needn't wait for us.
+    private func ignore(_ requestID: String) {
+        RemoteCommand.post(RemoteCommand.replyName, userInfo: RemoteCommand.Reply(ignoring: requestID).userInfo)
     }
 
     // MARK: - Per-app manual override
@@ -472,16 +515,21 @@ final class AppState: ObservableObject {
         guard store.profiles.first(where: { $0.id == profile.id }) != profile else { return }
         save { try store.upsert(profile) }
         if let active = activeProfile, active.id == profile.id {
-            // Keep the session's manual overrides for rules that still exist.
-            var updated = profile
-            for idx in updated.appRules.indices {
-                updated.appRules[idx].manualOverride = active.appRules
-                    .first { $0.id == updated.appRules[idx].id }?.manualOverride
-            }
-            activeProfile = updated
+            activeProfile = Self.keepingOverrides(of: active, in: profile)
         }
         syncLocationMonitoring()
         reevaluate()
+    }
+
+    /// `updated`, with the session's manual overrides from `active` for
+    /// rules that still exist.
+    private static func keepingOverrides(of active: Profile, in updated: Profile) -> Profile {
+        var updated = updated
+        for idx in updated.appRules.indices {
+            updated.appRules[idx].manualOverride = active.appRules
+                .first { $0.id == updated.appRules[idx].id }?.manualOverride
+        }
+        return updated
     }
 
     func deleteProfile(_ profile: Profile) {
@@ -493,9 +541,48 @@ final class AppState: ObservableObject {
         }
     }
 
+    // MARK: - Import and export
+
+    /// The profiles with these IDs, or all of them, for a file to import
+    /// elsewhere (see `ProfileStore.exportData`).
+    func exportData(of ids: Set<Profile.ID>? = nil) throws -> Data {
+        try store.exportData(of: ids)
+    }
+
+    /// So an export doesn't go over it.
+    func isProfilesFile(_ url: URL) -> Bool {
+        store.isProfilesFile(url.path)
+    }
+
+    /// Adds profiles read from `fileName`, replacing yours they match if
+    /// `replacing` (see `ProfileImport.merged`).
+    @discardableResult
+    func importProfiles(_ imported: ProfileImport, from fileName: String, replacing: Bool) -> ProfileImport.Merge {
+        applyImport(imported, from: fileName, replacing: replacing, fromCommandLine: false).merge
+    }
+
+    /// `saveError`: they're imported, but couldn't be saved (which is
+    /// reported, as for any change).
+    private func applyImport(_ imported: ProfileImport, from fileName: String, replacing: Bool,
+                             fromCommandLine: Bool) -> (merge: ProfileImport.Merge, saveError: Error?) {
+        let merge = store.merging(imported, replacing: replacing)
+        let saveError = save { try store.importProfiles(merge) }
+        // Replaced in place, so the active profile is still there.
+        if let active = activeProfile, let updated = merge.imported.first(where: { $0.id == active.id }) {
+            activeProfile = Self.keepingOverrides(of: active, in: updated)
+        }
+        let report = ImportCommand.report(merge, of: imported, from: fileName, dryRun: false)
+        log.record(fromCommandLine ? "From the command line: \(report)" : report)
+        syncLocationMonitoring()
+        reevaluate()
+        return (merge, saveError)
+    }
+
     /// Runs a store change that saves, reporting a save that fails — and
     /// the copy kept of a profiles.json that couldn't all be read, if one was.
-    private func save(_ change: () throws -> Void) {
+    /// Returns the failure.
+    @discardableResult
+    private func save(_ change: () throws -> Void) -> Error? {
         let copiedBefore = store.copiedAside
         var failure: Error?
         do {
@@ -511,13 +598,14 @@ final class AppState: ObservableObject {
             // The editor saves as you type: say so once, not per keystroke.
             if !isSaveFailing { reportProblem("Couldn't save your profiles", failure.localizedDescription) }
             isSaveFailing = true
-            return
+            return failure
         }
         if isSaveFailing {
             log.record("Saved your profiles again.")
             isSaveFailing = false
         }
         if store.problem == nil { profilesProblem = nil }
+        return nil
     }
 
     // MARK: - Settings

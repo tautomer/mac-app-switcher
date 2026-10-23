@@ -1,9 +1,12 @@
 import SwiftUI
 import AppKit
+import UniformTypeIdentifiers
 
 struct ProfileEditorView: View {
     @ObservedObject var appState: AppState
     @State private var selectedProfileID: Profile.ID?
+    @State private var showingImporter = false
+    @State private var transferAlert: TransferAlert?
 
     private var sortedProfiles: [Profile] {
         appState.profiles.sorted(by: { $0.priority > $1.priority })
@@ -23,6 +26,9 @@ struct ProfileEditorView: View {
             .navigationSplitViewColumnWidth(min: 180, ideal: 200, max: 300)
             .safeAreaInset(edge: .bottom, spacing: 0) {
                 sidebarActions
+            }
+            .fileImporter(isPresented: $showingImporter, allowedContentTypes: [.json]) { result in
+                if case .success(let url) = result { importProfiles(from: url) }
             }
             // The sidebar is the only way to pick a profile, so collapsing
             // it is never useful.
@@ -48,6 +54,16 @@ struct ProfileEditorView: View {
                 selectedProfileID = sortedProfiles.first?.id
             }
         }
+        .alert(transferAlert?.title ?? "", isPresented: Binding(get: { transferAlert != nil }, set: { if !$0 { transferAlert = nil } }),
+               presenting: transferAlert) { alert in
+            if let conflicting = alert.conflicting {
+                Button("Replace") { finishImport(conflicting.imported, from: conflicting.fileName, replacing: true) }
+                Button("Keep Both") { finishImport(conflicting.imported, from: conflicting.fileName, replacing: false) }
+                Button("Cancel", role: .cancel) {}
+            }
+        } message: { alert in
+            Text(alert.message)
+        }
         .keepsAppActiveWhileOpen()
         .frame(minWidth: 680, minHeight: 460)
     }
@@ -62,9 +78,32 @@ struct ProfileEditorView: View {
             SidebarActionButton(title: "Duplicate Profile", systemImage: "doc.on.doc", action: duplicateSelectedProfile)
                 .disabled(selectedProfile == nil)
             Spacer()
+            transferMenu
         }
         .padding(.horizontal, 8)
         .padding(.vertical, 6)
+    }
+
+    private var transferMenu: some View {
+        Menu {
+            Button("Import Profiles…") { showingImporter = true }
+            Divider()
+            Button(selectedProfile.map { "Export “\($0.name)”…" } ?? "Export Profile…") {
+                if let selectedProfile { export(selectedProfile) }
+            }
+            .disabled(selectedProfile == nil)
+            // Even with none to show: those that couldn't be read are exported too.
+            Button("Export All Profiles…") { export(nil) }
+        } label: {
+            Image(systemName: "ellipsis.circle")
+                .frame(width: 24, height: 22)
+                .contentShape(Rectangle())
+        }
+        .menuStyle(.borderlessButton)
+        .menuIndicator(.hidden)
+        .fixedSize()
+        .help("Import and export profiles")
+        .accessibilityLabel("Import and Export")
     }
 
     private func addProfile() {
@@ -75,15 +114,8 @@ struct ProfileEditorView: View {
 
     private func duplicateSelectedProfile() {
         guard let original = selectedProfile else { return }
-        var copy = original
-        copy.id = UUID()
+        var copy = original.withNewIDs()
         copy.name = "\(original.name) Copy"
-        copy.appRules = original.appRules.map { rule in
-            var rule = rule
-            rule.id = UUID()
-            rule.manualOverride = nil
-            return rule
-        }
         appState.saveProfile(copy)
         selectedProfileID = copy.id
     }
@@ -97,6 +129,134 @@ struct ProfileEditorView: View {
         }
         appState.deleteProfile(profile)
         selectedProfileID = neighbour?.id
+    }
+
+    // MARK: - Import and export
+
+    /// Opens the save panel for `profile`, or for all of them, and writes
+    /// the file: here rather than by SwiftUI's exporter, so it's never
+    /// over the profiles file, which may hold some that couldn't be read.
+    private func export(_ profile: Profile?) {
+        let data: Data
+        do {
+            data = try appState.exportData(of: profile.map { Set([$0.id]) })
+        } catch {
+            transferAlert = TransferAlert(title: "Couldn't export profiles", message: error.localizedDescription)
+            return
+        }
+        // A slash or colon in the name can't go in a file name.
+        let name = profile.map { $0.name.replacingOccurrences(of: "[/:]", with: "-", options: .regularExpression) }
+        let panel = NSSavePanel()
+        panel.allowedContentTypes = [.json]
+        panel.canCreateDirectories = true
+        panel.nameFieldStringValue = (name.flatMap { $0.isEmpty ? nil : $0 } ?? "ContextSwitch Profiles") + ".json"
+        Task {
+            var response = NSApplication.ModalResponse.cancel
+            if let window = NSApp.keyWindow {
+                response = await panel.beginSheetModal(for: window)
+            } else {
+                response = await panel.begin()
+            }
+            guard response == .OK, let url = panel.url else { return }
+            guard !appState.isProfilesFile(url) else {
+                transferAlert = TransferAlert(title: "That's where your profiles are kept",
+                                              message: "Nothing was exported over \(url.lastPathComponent). Choose another file.")
+                return
+            }
+            do {
+                try data.write(to: url, options: .atomic)
+            } catch {
+                transferAlert = TransferAlert(title: "Couldn't export profiles", message: error.localizedDescription)
+            }
+        }
+    }
+
+    /// Imports the profiles in `url`, first asking whether to replace yours
+    /// if some match them.
+    private func importProfiles(from url: URL) {
+        let fileName = url.lastPathComponent
+        let imported: ProfileImport
+        do {
+            imported = try ProfileStore.readImport(Data(contentsOf: url))
+        } catch {
+            transferAlert = TransferAlert(title: "Couldn't import \(fileName)", message: error is DecodingError
+                                          ? "It isn't a file of ContextSwitch profiles. \(ProfileStore.describe(error))"
+                                          : error.localizedDescription)
+            return
+        }
+        guard !imported.profiles.isEmpty else {
+            transferAlert = TransferAlert(title: "Couldn't import \(fileName)", message: imported.unreadable.isEmpty
+                                          ? "It has no profiles." : TransferAlert.leftOutNote(imported.unreadable))
+            return
+        }
+        if imported.matches(in: appState.profiles).contains(where: { $0 != nil }) {
+            transferAlert = .conflicts(imported, from: fileName, existing: appState.profiles)
+            return
+        }
+        finishImport(imported, from: fileName, replacing: false)
+        if !imported.unreadable.isEmpty {
+            transferAlert = .leftOut(imported.unreadable)
+        }
+    }
+
+    /// Imports, and selects the first of the imported profiles.
+    private func finishImport(_ imported: ProfileImport, from fileName: String, replacing: Bool) {
+        let ids = Set(appState.importProfiles(imported, from: fileName, replacing: replacing).imported.map(\.id))
+        selectedProfileID = sortedProfiles.first { ids.contains($0.id) }?.id ?? selectedProfileID
+    }
+}
+
+/// What the editor says about an import or export, or asks.
+private struct TransferAlert {
+    var title: String
+    var message: String
+    /// Set when imported profiles match some of yours: replace them, or
+    /// keep both?
+    var conflicting: (imported: ProfileImport, fileName: String)?
+
+    static func conflicts(_ imported: ProfileImport, from fileName: String, existing: [Profile]) -> TransferAlert {
+        let matches = imported.matches(in: existing)
+        let yours = matches.compactMap { $0 }
+        let title: String
+        var message: String
+        if yours.count == 1, let index = matches.firstIndex(where: { $0 != nil }) {
+            let kept = imported.merged(into: existing, replacing: false).imported[index]
+            title = "Replace your profile “\(yours[0].name)”?"
+            message = "\(fileName) has a profile of the same name, or exported from it. "
+                + "Replace changes yours to the imported one. Keep Both adds that as “\(kept.name)”."
+        } else {
+            title = "Replace \(yours.count) of your profiles?"
+            message = "\(fileName) has profiles of the same names as "
+                + "\(ListFormatter.localizedString(byJoining: yours.map { "“\($0.name)”" })), or exported from them. "
+                + "Replace changes yours to the imported ones. Keep Both adds those alongside, renamed if their names are taken."
+        }
+        let others = imported.profiles.count - yours.count
+        if others > 0 { message += " The other \(others == 1 ? "one is" : "\(others) are") added either way." }
+        if !imported.unreadable.isEmpty { message += "\n\n" + leftOutNote(imported.unreadable) }
+        return TransferAlert(title: title, message: message, conflicting: (imported, fileName))
+    }
+
+    /// After the others were imported.
+    static func leftOut(_ lost: [ProfileStore.UnreadableProfile]) -> TransferAlert {
+        let title: String
+        if lost.count == 1 {
+            title = "Couldn't import " + (lost[0].name.map { "“\($0)”" } ?? "a profile")
+        } else {
+            title = "Couldn't import \(lost.count) of the profiles"
+        }
+        return TransferAlert(title: title, message: leftOutNote(lost))
+    }
+
+    /// e.g. "“Office” couldn't be read, so it's left out. It may have been
+    /// saved by a newer version…"
+    static func leftOutNote(_ lost: [ProfileStore.UnreadableProfile]) -> String {
+        let why = "may have been saved by a newer version of ContextSwitch, or mistyped by hand"
+        if lost.count == 1 {
+            let name = lost[0].name.map { "“\($0)”" } ?? "A profile"
+            return "\(name) couldn't be read, so it's left out. It \(why): \(lost[0].reason)"
+        }
+        return (["\(lost.count) profiles couldn't be read, so they're left out. They \(why)."]
+            + lost.map { "\($0.name.map { "“\($0)”" } ?? "(no name)"): \($0.reason)" }).joined(separator: "\n")
     }
 }
 

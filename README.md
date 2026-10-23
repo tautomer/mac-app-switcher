@@ -113,6 +113,21 @@ relaunch everything, and then switches to whatever matches offline.
   goes to the system log:
   `log stream --level debug --predicate 'subsystem == "com.contextswitch.app"'`.
 
+### Import and export
+
+- The ⋯ menu under the profile list in **Edit Profiles…** exports the
+  selected profile, or all of them, to a JSON file, and imports profiles
+  from one: to move them to another Mac, share one, or keep a backup.
+- An export uses the same format as `profiles.json`, so you can import a
+  `profiles.json` too, or one of the copies ContextSwitch keeps.
+- An imported profile that matches one of yours, because it has the same
+  name or was exported from it, can **Replace** yours or be added as well
+  with **Keep Both**, under a new name if its name is taken.
+- Profiles this version can't read are left out, and you're told why.
+  Every import goes in the activity log.
+- The [command line](#command-line) does both too, with `--export` and
+  `--import`.
+
 ## Install
 
 1. Download the zip from the [latest release](https://github.com/tautomer/mac-app-switcher/releases/latest).
@@ -155,6 +170,12 @@ contextswitch --list                      # profiles, and which match right now
 contextswitch --switch                    # switch once to the matching profile
 contextswitch --profile Office            # switch once to a profile by name
 contextswitch --profile Office --dry-run  # show what would launch or quit
+
+contextswitch --export backup.json                  # all profiles (or - for standard output)
+contextswitch --export office.json --profile Office # just one
+contextswitch --import backup.json --dry-run        # show what would be imported
+contextswitch --import backup.json --replace        # replace yours that match
+contextswitch --import backup.json --keep-both      # or add them as well
 ```
 
 ```
@@ -167,8 +188,18 @@ Network: Wi-Fi “Home-WiFi” · router 192.168.1.1
 
 If the menu bar app is running, `--switch` and `--profile` are carried out
 by it, so the menu stays in sync. Unlike picking a profile from the menu,
-they leave auto-switch as it is. Exit codes: `0` success, `1` no profile
-matches, `2` no profile with that name, `64` usage error.
+they leave auto-switch as it is.
+
+`--import` is carried out by the menu bar app too, which would otherwise
+save over the imported profiles. If it doesn't answer, perhaps because it's
+an older version, nothing is imported. When profiles in the file match
+yours, nothing is imported either, unless you add `--replace` or
+`--keep-both`.
+
+Exit codes: `0` success, `1` no profile matches, `2` no profile with that
+name, `3` profiles to import match yours, `64` usage error, `65` not a file
+of profiles, `66` the file can't be read, `74` the file or your profiles
+can't be written, `75` the menu bar app didn't answer.
 
 ## Building from source
 

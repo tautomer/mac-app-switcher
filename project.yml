@@ -77,6 +77,8 @@ targets:
       - path: Sources/ContextSwitch/Services/ActivityLog.swift
       - path: Sources/ContextSwitch/Services/ProcessExitWatcher.swift
       - path: Sources/ContextSwitch/CLI/CommandLineCommand.swift
+      - path: Sources/ContextSwitch/CLI/ImportCommand.swift
+      - path: Sources/ContextSwitch/CLI/RemoteCommand.swift
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.contextswitch.tests

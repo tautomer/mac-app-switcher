@@ -64,6 +64,29 @@ final class ProfileStore: ObservableObject {
         self.init(fileURL: Self.defaultFileURL)
     }
 
+    /// Runs `body` holding a lock on these profiles (a .lock file beside
+    /// them), so the menu bar app can't load them in the middle of an
+    /// import from the command line, and later save over it: the app takes
+    /// it while it loads them, and the command line while it imports with
+    /// no app running. Without a lock file (a folder that can't be written
+    /// to), `body` runs anyway.
+    static func whileLocked<T>(_ fileURL: URL = defaultFileURL, _ body: () throws -> T) rethrows -> T {
+        try? FileManager.default.createDirectory(at: fileURL.deletingLastPathComponent(), withIntermediateDirectories: true)
+        let lock = open(fileURL.path + ".lock", O_RDWR | O_CREAT | O_CLOEXEC, 0o644)
+        // Closing it lets go.
+        defer { if lock >= 0 { close(lock) } }
+        if lock >= 0 { flock(lock, LOCK_EX) }
+        return try body()
+    }
+
+    /// Whether `path` is this file, by whatever name: /tmp/x and
+    /// /private/tmp/x are the same file, say.
+    func isProfilesFile(_ path: String) -> Bool {
+        var info = stat(), mine = stat()
+        guard stat(path, &info) == 0, stat(fileURL.path, &mine) == 0 else { return path == fileURL.path }
+        return info.st_dev == mine.st_dev && info.st_ino == mine.st_ino
+    }
+
     /// e.g. CONTEXTSWITCH_PROFILES pointed at one by mistake.
     private var isFolder: Bool {
         var isDirectory: ObjCBool = false
@@ -122,9 +145,13 @@ final class ProfileStore: ObservableObject {
         }
     }
 
+    /// What's saved: the profiles, then those that couldn't be read.
+    private var entries: [StoredProfile] {
+        profiles.map { .readable($0, generatedID: false) } + unreadable.map { .unreadable($0, reason: "") }
+    }
+
     func save() throws {
         guard !isFolder else { throw SaveError.isAFolder(fileURL) }
-        let entries: [StoredProfile] = profiles.map { .readable($0, generatedID: false) } + unreadable.map { .unreadable($0, reason: "") }
         let data = try JSONEncoder().encode(entries)
         // Copied rather than moved, so a write that fails leaves the file as
         // it was, and nothing is cleared until the write has worked. A retry
@@ -170,6 +197,45 @@ final class ProfileStore: ObservableObject {
     func delete(_ profile: Profile) throws {
         profiles.removeAll { $0.id == profile.id }
         try save()
+    }
+
+    /// `imported` merged into the profiles (see `ProfileImport.merged`),
+    /// keeping clear of the IDs of those that couldn't be read: they're
+    /// saved too.
+    func merging(_ imported: ProfileImport, replacing: Bool) -> ProfileImport.Merge {
+        let unreadableIDs = unreadable.compactMap { $0["id"]?.stringValue.flatMap(UUID.init(uuidString:)) }
+        return imported.merged(into: profiles, replacing: replacing, reserving: Set(unreadableIDs))
+    }
+
+    /// Takes in profiles from a file, as `merging` puts them.
+    func importProfiles(_ merge: ProfileImport.Merge) throws {
+        profiles = merge.profiles
+        try save()
+    }
+
+    /// The profiles with these IDs, or all of them (with any that couldn't
+    /// be read, as they were), for a file to import elsewhere: the format of
+    /// profiles.json, laid out to be read.
+    func exportData(of ids: Set<Profile.ID>? = nil) throws -> Data {
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.prettyPrinted, .sortedKeys, .withoutEscapingSlashes]
+        guard let ids else { return try encoder.encode(entries) }
+        return try encoder.encode(profiles.filter { ids.contains($0.id) })
+    }
+
+    /// Reads a file to import: an export, or a profiles.json (such as a copy
+    /// kept aside). Profiles it can't read are left out, and listed.
+    static func readImport(_ data: Data) throws -> ProfileImport {
+        var result = ProfileImport(profiles: [])
+        for entry in try JSONDecoder().decode([StoredProfile].self, from: data) {
+            switch entry {
+            case .readable(let profile, _):
+                result.profiles.append(profile)
+            case .unreadable(let raw, let reason):
+                result.unreadable.append(UnreadableProfile(name: raw["name"]?.stringValue, reason: reason))
+            }
+        }
+        return result
     }
 
     private static func defaultProfiles() -> [Profile] {

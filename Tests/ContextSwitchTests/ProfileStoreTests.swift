@@ -208,6 +208,31 @@ private func temporaryProfilesURL() throws -> URL {
         #expect(profile.priority == 0)
     }
 
+    @Test func knowsItsFileByAnotherPath() throws {
+        let folder = try temporaryFolder()
+        let store = ProfileStore(fileURL: folder.appendingPathComponent("profiles.json"))
+        let alias = folder.appendingPathComponent("alias.json")
+        try FileManager.default.createSymbolicLink(at: alias, withDestinationURL: store.fileURL)
+        try Data("[]".utf8).write(to: folder.appendingPathComponent("other.json"))
+
+        #expect(store.isProfilesFile(alias.path))
+        // The temporary folder is under /var, which is /private/var.
+        #expect(store.isProfilesFile("/private" + store.fileURL.resolvingSymlinksInPath().path))
+        #expect(!store.isProfilesFile(folder.appendingPathComponent("other.json").path))
+        #expect(!store.isProfilesFile(folder.appendingPathComponent("missing.json").path))
+    }
+
+    @Test func theLockIsHeldUntilTheBodyReturns() throws {
+        let url = try temporaryFolder().appendingPathComponent("profiles.json")
+        func tryLock() -> Bool {
+            let fd = open(url.path + ".lock", O_RDWR)
+            defer { close(fd) }
+            return flock(fd, LOCK_EX | LOCK_NB) == 0
+        }
+        #expect(ProfileStore.whileLocked(url) { !tryLock() })
+        #expect(tryLock())
+    }
+
     @Test func jsonValueRoundTrips() throws {
         let json = #"{"a":[1,1.5,true,null,"x"],"b":{"c":-7}}"#
         let value = try JSONDecoder().decode(JSONValue.self, from: Data(json.utf8))

@@ -87,6 +87,19 @@ struct Profile: Codable, Hashable, Identifiable {
         conditions.insert(ConditionClause(condition, connector: .and), at: position + 1)
     }
 
+    /// A copy that's a profile of its own: new IDs, and no manual overrides.
+    func withNewIDs() -> Profile {
+        var copy = self
+        copy.id = UUID()
+        copy.appRules = appRules.map { rule in
+            var rule = rule
+            rule.id = UUID()
+            rule.manualOverride = nil
+            return rule
+        }
+        return copy
+    }
+
     /// Removes a clause. If it started its group, the next clause in that
     /// group takes over the "or", so the group doesn't merge into the one
     /// before it.
@@ -125,10 +138,22 @@ extension Profile {
 extension Array where Element == Profile {
     /// Looks a profile up by name, ignoring case and accents. If names
     /// repeat, the highest-priority one wins.
+    /// Spaces around either name don't count.
     func profile(named name: String) -> Profile? {
         let wanted = name.trimmingCharacters(in: .whitespaces)
-        return filter { $0.name.compare(wanted, options: [.caseInsensitive, .diacriticInsensitive]) == .orderedSame }
-            .max { $0.priority < $1.priority }
+        return filter {
+            $0.name.trimmingCharacters(in: .whitespaces)
+                .compare(wanted, options: [.caseInsensitive, .diacriticInsensitive]) == .orderedSame
+        }
+        .max { $0.priority < $1.priority }
+    }
+
+    /// `name`, or if a profile has it already, the first free "name 2",
+    /// "name 3"…
+    func uniqueName(for name: String) -> String {
+        guard profile(named: name) != nil else { return name }
+        let base = name.trimmingCharacters(in: .whitespaces)
+        return (2...).lazy.map { "\(base) \($0)" }.first { profile(named: $0) == nil }!
     }
 }
 

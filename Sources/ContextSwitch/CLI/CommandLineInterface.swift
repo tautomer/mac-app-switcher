@@ -1,16 +1,11 @@
 import AppKit
 
 /// Runs a `CommandLineCommand` and returns the process exit status. If the
-/// menu bar app is running, switching is handed to it; otherwise it's done
-/// here, in this short-lived process.
+/// menu bar app is running, switching and importing are handed to it;
+/// otherwise they're done here, in this short-lived process.
 @MainActor
 enum CommandLineInterface {
-    enum ExitStatus {
-        static let success: Int32 = 0
-        static let noMatchingProfile: Int32 = 1
-        static let unknownProfile: Int32 = 2
-        static let usage: Int32 = 64
-    }
+    typealias ExitStatus = CommandLineCommand.ExitStatus
 
     static func run(_ command: CommandLineCommand) -> Int32 {
         switch command {
@@ -26,13 +21,17 @@ enum CommandLineInterface {
             return switchProfile(named: nil, dryRun: dryRun)
         case .switchTo(let name, let dryRun):
             return switchProfile(named: name, dryRun: dryRun)
+        case .export(let file, let profile):
+            return export(to: file, profileName: profile)
+        case .importProfiles(let file, let onMatch, let dryRun):
+            return importProfiles(from: file, onMatch: onMatch, dryRun: dryRun)
         }
     }
 
     // MARK: - Commands
 
     private static func list() -> Int32 {
-        let store = ProfileStore()
+        let store = loadProfiles()
         warnAboutProblem(in: store)
         let profiles = store.profiles.sorted { $0.priority > $1.priority }
         let snapshot = NetworkMonitor.buildSnapshot()
@@ -58,7 +57,7 @@ enum CommandLineInterface {
     }
 
     private static func switchProfile(named name: String?, dryRun: Bool) -> Int32 {
-        let store = ProfileStore()
+        let store = loadProfiles()
         warnAboutProblem(in: store)
         if !dryRun, let reply = forwardToRunningApp(profileName: name, profilesPath: store.fileURL.path) {
             if reply.status == ExitStatus.success { print(reply.output) } else { printError(reply.output) }
@@ -123,36 +122,208 @@ enum CommandLineInterface {
         return ExitStatus.success
     }
 
+    /// All profiles, or the named one, as JSON to `path` or standard output.
+    /// Done here even if the menu bar app is running: it saves every change.
+    private static func export(to path: String?, profileName: String?) -> Int32 {
+        let store = loadProfiles()
+        warnAboutProblem(in: store)
+        // What there is instead is a blank profile.
+        if case .unreadableFile? = store.problem {
+            printError("Nothing was exported, as your profiles couldn't be read.")
+            return ExitStatus.badData
+        }
+        var profile: Profile?
+        if let profileName {
+            guard let named = store.profiles.profile(named: profileName) else {
+                printError(unknownProfileMessage(profileName, profiles: store.profiles))
+                return ExitStatus.unknownProfile
+            }
+            profile = named
+        }
+        do {
+            let data = try store.exportData(of: profile.map { Set([$0.id]) })
+            guard let path, path != "-" else {
+                FileHandle.standardOutput.write(data + Data("\n".utf8))
+                return ExitStatus.success
+            }
+            guard !store.isProfilesFile(path) else {
+                printError("\(path) is where ContextSwitch keeps your profiles: export to another file.")
+                return ExitStatus.usage
+            }
+            try data.write(to: URL(fileURLWithPath: path), options: .atomic)
+            let what = profile.map { "“\($0.name)”" } ?? (store.profiles.count == 1 ? "1 profile" : "\(store.profiles.count) profiles")
+            var also = ""
+            if profile == nil, case .unreadableProfiles(let lost)? = store.problem {
+                also = ", and \(lost.count) that this version can't read, as \(lost.count == 1 ? "it was" : "they were")"
+            }
+            print("Exported \(what) to \(path)\(also).")
+            return ExitStatus.success
+        } catch {
+            printError("Couldn't write \(path ?? "the profiles"): \(error.localizedDescription)")
+            return ExitStatus.cannotWrite
+        }
+    }
+
+    private static func importProfiles(from path: String, onMatch: CommandLineCommand.OnMatch, dryRun: Bool) -> Int32 {
+        let fileName = path == "-" ? "standard input" : URL(fileURLWithPath: path).lastPathComponent
+        let data: Data
+        do {
+            data = path == "-" ? FileHandle.standardInput.readDataToEndOfFile() : try Data(contentsOf: URL(fileURLWithPath: path))
+        } catch {
+            printError("Couldn't read \(path): \(error.localizedDescription)")
+            return ExitStatus.cannotRead
+        }
+        // Checked here first, so a mistake needn't trouble the menu bar app.
+        // Whether profiles match yours is for whichever has them to say.
+        do throws(ImportCommand.Failure) {
+            _ = try ImportCommand.read(data, from: fileName)
+        } catch {
+            printError(error.message)
+            return error.status
+        }
+        let store = loadProfiles()
+        warnAboutProblem(in: store)
+
+        // A dry run goes by the saved profiles, as the running app's are.
+        guard !dryRun else { return importHere(data, from: fileName, into: store, onMatch: onMatch, dryRun: true) }
+
+        let request = RemoteCommand.ImportRequest(profilesPath: store.fileURL.path, fileName: fileName, contents: data,
+                                                  onMatch: onMatch)
+        let ignoredBy: Set<pid_t>
+        switch forward(RemoteCommand.importRequestName, id: request.id, userInfo: request.userInfo) {
+        case .answered(let reply):
+            if reply.status == ExitStatus.success { print(reply.output) } else { printError(reply.output) }
+            return reply.status
+        case .unanswered(accepted: true):
+            printError("ContextSwitch took the import on, but hasn't said how it went. "
+                       + "Check Edit Profiles before trying again.")
+            return ExitStatus.tryAgain
+        case .unanswered(accepted: false):
+            // Doing it here, it could save over the import. It drops a
+            // request it gets too late to take on (see `importExpiry`).
+            printError("ContextSwitch is running but didn't answer (it may be a version without --import), "
+                       + "so nothing was imported. Try again, or quit ContextSwitch and import then.")
+            return ExitStatus.tryAgain
+        case .notForwarded(let ignoring):
+            ignoredBy = ignoring
+        }
+        // No app has these profiles now, but one could start: it waits for
+        // the lock to load them, and one that has started has them already.
+        return ProfileStore.whileLocked(store.fileURL) {
+            guard otherInstances().allSatisfy({ ignoredBy.contains($0.processIdentifier) }) else {
+                printError("ContextSwitch started meanwhile, so nothing was imported. Try again.")
+                return ExitStatus.tryAgain
+            }
+            store.load()
+            return importHere(data, from: fileName, into: store, onMatch: onMatch, dryRun: false)
+        }
+    }
+
+    /// `--import`, with no menu bar app to carry it out.
+    private static func importHere(_ data: Data, from fileName: String, into store: ProfileStore,
+                                   onMatch: CommandLineCommand.OnMatch, dryRun: Bool) -> Int32 {
+        let imported: ProfileImport, replacing: Bool
+        switch ImportCommand.plan(data, from: fileName, into: store.profiles, onMatch: onMatch) {
+        case .fail(let status, let message):
+            printError(message)
+            return status
+        case .importing(let planned, let replace):
+            (imported, replacing) = (planned, replace)
+        }
+        let merge = store.merging(imported, replacing: replacing)
+        if dryRun {
+            print(ImportCommand.report(merge, of: imported, from: fileName, dryRun: true))
+            return ExitStatus.success
+        }
+        let log = ActivityLog.shared
+        defer { log.flush() }
+        do {
+            try store.importProfiles(merge)
+        } catch {
+            printError("Couldn't save your profiles: \(error.localizedDescription)")
+            return ExitStatus.cannotWrite
+        }
+        if let copy = store.copiedAside {
+            let note = "Saved a copy of the original \(store.fileURL.lastPathComponent) as \(copy.lastPathComponent) before saving over it."
+            log.record(note)
+            printError(note)
+        }
+        let report = ImportCommand.report(merge, of: imported, from: fileName, dryRun: false)
+        log.record("From the command line: \(report)")
+        print(report)
+        return ExitStatus.success
+    }
+
+    /// Loading can save (IDs made up for profiles without one, or the
+    /// default profile in a new file), so it's done holding the lock, like
+    /// a standalone import (see `ProfileStore.whileLocked`).
+    private static func loadProfiles() -> ProfileStore {
+        ProfileStore.whileLocked { ProfileStore() }
+    }
+
     // MARK: - Running app
 
     /// Hands the switch to a running menu bar app and waits for its reply.
-    /// nil if none is running, or it didn't answer — then we do it here,
-    /// which is safe even if it acts late: enforcing a profile twice changes
-    /// nothing the second time.
+    /// nil if none is running for these profiles, or it didn't answer — then
+    /// we do it here, which is safe even if it acts late: enforcing a profile
+    /// twice changes nothing the second time.
     private static func forwardToRunningApp(profileName: String?, profilesPath: String) -> RemoteCommand.Reply? {
-        let bundleID = Bundle.main.bundleIdentifier ?? "com.contextswitch.app"
-        let others = NSRunningApplication.runningApplications(withBundleIdentifier: bundleID)
-            .filter { $0.processIdentifier != ProcessInfo.processInfo.processIdentifier }
-        guard !others.isEmpty else { return nil }
-
         let request = RemoteCommand.Request(profileName: profileName, profilesPath: profilesPath)
+        switch forward(RemoteCommand.requestName, id: request.id, userInfo: request.userInfo) {
+        case .answered(let reply):
+            return reply
+        case .notForwarded:
+            return nil
+        case .unanswered:
+            printError("The running ContextSwitch didn't answer; switching from here instead.")
+            return nil
+        }
+    }
+
+    /// Other ContextSwitch processes running: menu bar apps, mostly.
+    private static func otherInstances() -> [NSRunningApplication] {
+        let bundleID = Bundle.main.bundleIdentifier ?? "com.contextswitch.app"
+        return NSRunningApplication.runningApplications(withBundleIdentifier: bundleID)
+            .filter { $0.processIdentifier != ProcessInfo.processInfo.processIdentifier }
+    }
+
+    private enum Forwarding {
+        case answered(RemoteCommand.Reply)
+        /// No menu bar app is running, or none uses these profiles: the ones
+        /// running, by process ID, said so.
+        case notForwarded(ignoredBy: Set<pid_t>)
+        /// One is running, but didn't answer: it may use these profiles.
+        /// `accepted`: it took an import on, but didn't say how it went.
+        case unanswered(accepted: Bool)
+    }
+
+    /// Posts a request to the running menu bar apps, and waits for the one
+    /// using these profiles to answer, or every one to say it doesn't.
+    private static func forward(_ name: Notification.Name, id: String, userInfo: [String: String]) -> Forwarding {
+        let others = otherInstances()
+        guard !others.isEmpty else { return .notForwarded(ignoredBy: []) }
+
         let box = ReplyBox()
         let center = DistributedNotificationCenter.default()
         let observer = center.addObserver(forName: RemoteCommand.replyName, object: nil, queue: .main) { note in
-            guard let reply = RemoteCommand.Reply(userInfo: note.userInfo), reply.id == request.id else { return }
-            MainActor.assumeIsolated { box.reply = reply }
+            guard let reply = RemoteCommand.Reply(userInfo: note.userInfo), reply.id == id else { return }
+            MainActor.assumeIsolated { box.replies.append(reply) }
         }
         defer { center.removeObserver(observer) }
 
-        RemoteCommand.post(RemoteCommand.requestName, userInfo: request.userInfo)
-        let deadline = Date().addingTimeInterval(5)
-        while box.reply == nil && Date() < deadline {
+        RemoteCommand.post(name, userInfo: userInfo)
+        let sent = Date()
+        while true {
+            if let answer = box.replies.first(where: { $0.kind == .answer }) { return .answered(answer) }
+            if box.replies.filter({ $0.kind == .ignored }).count >= others.count {
+                return .notForwarded(ignoredBy: Set(others.map(\.processIdentifier)))
+            }
+            let accepted = box.replies.contains { $0.kind == .accepted }
+            guard Date() < sent.addingTimeInterval(accepted ? RemoteCommand.acceptedTimeout : RemoteCommand.replyTimeout) else {
+                return .unanswered(accepted: accepted)
+            }
             RunLoop.main.run(mode: .default, before: Date().addingTimeInterval(0.05))
         }
-        if box.reply == nil {
-            printError("The running ContextSwitch didn't answer; switching from here instead.")
-        }
-        return box.reply
     }
 
     // MARK: - Messages (shared with the menu bar app's replies)
@@ -243,5 +414,5 @@ private final class LaunchTracker {
 
 @MainActor
 private final class ReplyBox {
-    var reply: RemoteCommand.Reply?
+    var replies: [RemoteCommand.Reply] = []
 }
