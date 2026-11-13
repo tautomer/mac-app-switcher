@@ -327,7 +327,7 @@ private struct ProfileDetailEditor: View {
                             }
                         }
                         Spacer()
-                        ArgumentsButton(rule: $rule)
+                        ArgumentsButton(rule: $rule, siblings: profile.appRules)
                         Picker("", selection: $rule.action) {
                             Text("Launch").tag(AppAction.launch)
                             Text("Quit").tag(AppAction.quit)
@@ -335,7 +335,7 @@ private struct ProfileDetailEditor: View {
                         }
                         .labelsHidden()
                         .frame(width: 110)
-                        RemoveButton { profile.appRules.removeAll { $0.id == rule.id } }
+                        RemoveButton { profile.removeRule(id: rule.id) }
                     }
                 }
                 Button {
@@ -659,13 +659,16 @@ func countdownLabel(_ interval: TimeInterval) -> String {
 /// Opens a popover to paste what an app or executable is launched with.
 private struct ArgumentsButton: View {
     @Binding var rule: AppRule
+    /// All the profile's apps, for "Start after".
+    let siblings: [AppRule]
     @State private var isEditing = false
 
     var body: some View {
         let arguments = rule.arguments ?? []
         let launches = !arguments.isEmpty || rule.runsDirectly == true
             ? "Launches \(rule.runsDirectly == true ? "directly " : "")with: \(ShellWords.join(arguments))" : nil
-        let summary = [launches, rule.relaunchesOnCrash == true ? "Relaunches if it crashes" : nil].compactMap { $0 }
+        let after = LaunchOrder.dependency(of: rule, in: siblings).map { "Starts after \($0.displayName)" }
+        let summary = [launches, after, rule.relaunchesOnCrash == true ? "Relaunches if it crashes" : nil].compactMap { $0 }
         Button {
             isEditing = true
         } label: {
@@ -675,7 +678,7 @@ private struct ArgumentsButton: View {
         .buttonStyle(.borderless)
         .help(summary.isEmpty ? "Launch options" : summary.joined(separator: ". "))
         .popover(isPresented: $isEditing, arrowEdge: .bottom) {
-            ArgumentsEditor(rule: rule) { rule = $0 }
+            ArgumentsEditor(rule: rule, siblings: siblings) { rule = $0 }
         }
     }
 }
@@ -683,14 +686,20 @@ private struct ArgumentsButton: View {
 private struct ArgumentsEditor: View {
     @Environment(\.dismiss) private var dismiss
     let rule: AppRule
+    let siblings: [AppRule]
     let onSave: (AppRule) -> Void
     @State private var text: String
+    @State private var launchesAfter: UUID?
+    @State private var launchDelay: Int
     @State private var runsDirectly: Bool
     @State private var relaunchesOnCrash: Bool
 
-    init(rule: AppRule, onSave: @escaping (AppRule) -> Void) {
+    init(rule: AppRule, siblings: [AppRule], onSave: @escaping (AppRule) -> Void) {
         self.rule = rule
+        self.siblings = siblings
         self.onSave = onSave
+        _launchesAfter = State(initialValue: rule.launchesAfter)
+        _launchDelay = State(initialValue: rule.launchDelay ?? 0)
         _text = State(initialValue: ShellWords.join(rule.arguments ?? []))
         _runsDirectly = State(initialValue: rule.runsDirectly == true)
         _relaunchesOnCrash = State(initialValue: rule.relaunchesOnCrash == true)
@@ -699,6 +708,28 @@ private struct ArgumentsEditor: View {
     /// nil while a quote is open.
     private var arguments: [String]? {
         ShellWords.arguments(fromCommandLine: text, program: AppLauncherService.shared.executableURL(for: rule))
+    }
+
+    private var startAfterSection: some View {
+        let candidates = LaunchOrder.candidates(for: rule, in: siblings)
+        return VStack(alignment: .leading, spacing: 6) {
+            Picker("Start after", selection: $launchesAfter) {
+                Text("Right away").tag(UUID?.none)
+                ForEach(candidates) { other in
+                    Text(other.displayName).tag(UUID?.some(other.id))
+                }
+            }
+            .disabled(candidates.isEmpty && launchesAfter == nil)
+            if launchesAfter != nil {
+                Stepper("Then wait \(launchDelay) s", value: $launchDelay, in: 0...300)
+            }
+            Text(candidates.isEmpty && launchesAfter == nil
+                 ? "Add another app that this profile launches to start \(rule.displayName) after it."
+                 : "For an app that needs another one up first, like a proxy that needs Tailscale. ContextSwitch launches \(rule.displayName) once that app is running, and the wait gives it time to get ready; it gives up after \(Int(LaunchSequencer.defaultDependencyTimeout.components.seconds)) seconds. Not waited for if that app is running already.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+        }
     }
 
     var body: some View {
@@ -738,6 +769,8 @@ private struct ArgumentsEditor: View {
                     .fixedSize(horizontal: false, vertical: true)
             }
             Divider()
+            startAfterSection
+            Divider()
             Toggle("Relaunch it if it crashes", isOn: $relaunchesOnCrash)
             Text("While this profile keeps \(rule.displayName) running, ContextSwitch opens it again a moment after it crashes — exits with an error, or is ended by a crash signal. Quitting it, even with Force Quit, doesn't count. ContextSwitch gives up after \(CrashHistory.limit) crashes in \(Int(CrashHistory.window / 60)) minutes.")
                 .font(.caption)
@@ -753,6 +786,8 @@ private struct ArgumentsEditor: View {
                     updated.arguments = arguments.isEmpty ? nil : arguments
                     updated.runsDirectly = runsDirectly ? true : nil
                     updated.relaunchesOnCrash = relaunchesOnCrash ? true : nil
+                    updated.launchesAfter = launchesAfter
+                    updated.launchDelay = launchesAfter != nil && launchDelay > 0 ? launchDelay : nil
                     onSave(updated)
                     dismiss()
                 }

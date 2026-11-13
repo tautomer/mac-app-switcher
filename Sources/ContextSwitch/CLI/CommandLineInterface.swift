@@ -84,17 +84,21 @@ enum CommandLineInterface {
             reason = best.isFallback ? .fallback : .matched
         }
 
-        let launcher = AppLauncherService.shared
+        let sequencer = LaunchSequencer()
         let launches = LaunchTracker()
-        let outcomes = profile.appRules.map { rule in
-            let outcome = launcher.enforce(rule.action, for: rule, dryRun: dryRun) { failure in
-                launches.finished(rule.displayName, failure: failure)
-            }
-            if outcome == .launched && !dryRun { launches.pending += 1 }
-            return (rule, outcome)
+        let outcomes = sequencer.enforce(profile.appRules, dryRun: dryRun) { rule, failure in
+            launches.finished(rule.displayName, failure: failure)
         }
-        // Stay alive until the launches have gone through (or 30 s pass).
-        let deadline = Date().addingTimeInterval(30)
+        if !dryRun { launches.pending = outcomes.filter { $0.1.completesLater }.count }
+        // Stay alive until the launches have gone through (or 30 s pass, and
+        // for those held back, as long as they wait for others).
+        var patience: TimeInterval = 30
+        for (rule, outcome) in outcomes {
+            if case .waiting = outcome {
+                patience += Double(sequencer.dependencyTimeout.components.seconds) + Double(rule.launchDelay ?? 0)
+            }
+        }
+        let deadline = Date().addingTimeInterval(patience)
         while launches.pending > 0 && Date() < deadline {
             RunLoop.main.run(mode: .default, before: Date().addingTimeInterval(0.1))
         }
@@ -354,10 +358,18 @@ enum CommandLineInterface {
             case .alreadyRunning: lines.append("  · \(name) is already running")
             case .notRunning: lines.append("  · \(name) isn't running")
             case .ignored: lines.append("  · \(name) is left as it is")
+            case .waiting(let other): lines.append("  ▸ \(dryRun ? "would launch" : "will launch") \(name) once \(other) is running\(delaySuffix(of: rule))")
+            case .blocked(let other): lines.append("  · \(name) isn't launched: \(other) isn't running, and the profile doesn't launch it")
             }
         }
         if outcomes.isEmpty { lines.append("  (no apps in this profile)") }
         return lines
+    }
+
+    /// e.g. ", and 5 s after"
+    private static func delaySuffix(of rule: AppRule) -> String {
+        guard let delay = rule.launchDelay, delay > 0 else { return "" }
+        return ", and \(delay) s after"
     }
 
     static func unknownProfileMessage(_ name: String, profiles: [Profile]) -> String {

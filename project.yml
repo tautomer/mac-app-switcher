@@ -76,6 +76,8 @@ targets:
       - path: Sources/ContextSwitch/Services/ProfileStore.swift
       - path: Sources/ContextSwitch/Services/ActivityLog.swift
       - path: Sources/ContextSwitch/Services/ProcessExitWatcher.swift
+      - path: Sources/ContextSwitch/Services/AppLauncherService.swift
+      - path: Sources/ContextSwitch/Services/LaunchSequencer.swift
       - path: Sources/ContextSwitch/CLI/CommandLineCommand.swift
       - path: Sources/ContextSwitch/CLI/ImportCommand.swift
       - path: Sources/ContextSwitch/CLI/RemoteCommand.swift

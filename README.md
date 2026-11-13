@@ -84,6 +84,13 @@ relaunch everything, and then switches to whatever matches offline.
   with an error status (a Rust panic exits with 101) or a crash signal
   such as `SIGSEGV`. It gives up after 3 crashes in 5 minutes. Like the
   two options above, it's in the app's launch options (the terminal icon).
+- **Start after** holds an app back until another app in the profile is
+  running, for one that needs the other up first: a proxy after Tailscale.
+  An optional wait, in seconds, gives that app time to get ready once it's
+  running (Tailscale to connect). If it was running already, there's no
+  wait; if it never comes up, or can't be launched, the app is left
+  closed, with a notification, after 60 seconds. Switching to another
+  profile drops what's still waiting. It's in the launch options too.
 - Apps are quit the normal way, like ⌘Q, so they can ask you to save your
   work. Programs started directly, scripts and tools get `SIGTERM` instead,
   which can't ask.

@@ -91,13 +91,26 @@ struct Profile: Codable, Hashable, Identifiable {
     func withNewIDs() -> Profile {
         var copy = self
         copy.id = UUID()
+        let newIDs = Dictionary(appRules.map { ($0.id, UUID()) }, uniquingKeysWith: { first, _ in first })
         copy.appRules = appRules.map { rule in
             var rule = rule
-            rule.id = UUID()
+            rule.id = newIDs[rule.id] ?? UUID()
+            // Still after the copy of the rule it was after.
+            rule.launchesAfter = rule.launchesAfter.flatMap { newIDs[$0] }
+            if rule.launchesAfter == nil { rule.launchDelay = nil }
             rule.manualOverride = nil
             return rule
         }
         return copy
+    }
+
+    /// Removes an app, and the "start after" of the ones that waited for it.
+    mutating func removeRule(id: AppRule.ID) {
+        appRules.removeAll { $0.id == id }
+        for index in appRules.indices where appRules[index].launchesAfter == id {
+            appRules[index].launchesAfter = nil
+            appRules[index].launchDelay = nil
+        }
     }
 
     /// Removes a clause. If it started its group, the next clause in that

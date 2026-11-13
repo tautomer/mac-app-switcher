@@ -36,6 +36,8 @@ final class AppState: ObservableObject {
     private let networkMonitor = NetworkMonitor()
     private let locationMonitor = LocationMonitor()
     private let launcher = AppLauncherService.shared
+    /// Holds back the apps of the active profile that launch after another.
+    private let sequencer = LaunchSequencer()
     private let log = ActivityLog.shared
     private let notifier = Notifier()
     private var cancellables = Set<AnyCancellable>()
@@ -235,6 +237,8 @@ final class AppState: ObservableObject {
             log.record("No profile matches now, and there's no fallback profile, so apps are left as they are.\n"
                        + "  \(CLI.networkSummary(snapshot))")
             activeProfile = nil
+            // Apps still held back were for a profile that isn't active now.
+            sequencer.cancelAll()
         }
     }
 
@@ -275,7 +279,7 @@ final class AppState: ObservableObject {
         let previous = activeProfile
         activeProfile = profile
         Self.defaults.set(profile.id.uuidString, forKey: DefaultsKey.lastActiveProfile)
-        let outcomes = profile.appRules.map { ($0, enforce($0)) }
+        let outcomes = sequencer.enforce(profile.appRules, onFinished: reportLaunch)
         recordSwitch(from: previous, to: profile, trigger: trigger, outcomes: outcomes)
         return outcomes
     }
@@ -284,9 +288,11 @@ final class AppState: ObservableObject {
     /// launch that fails.
     @discardableResult
     private func enforce(_ rule: AppRule) -> EnforceOutcome {
-        launcher.enforce(rule.effectiveAction, for: rule) { [weak self] failure in
-            if let failure { self?.reportProblem("Couldn't launch \(rule.displayName)", failure.reason) }
-        }
+        sequencer.enforce(rule, in: activeProfile?.appRules ?? [rule], onFinished: reportLaunch)
+    }
+
+    private func reportLaunch(_ rule: AppRule, failure: LaunchFailure?) {
+        if let failure { reportProblem("Couldn't launch \(rule.displayName)", failure.reason) }
     }
 
     /// Logs the switch and why, and if it happened on its own, says so in
@@ -318,7 +324,7 @@ final class AppState: ObservableObject {
 
     /// e.g. "Launching Slack and Outlook, quitting Steam."
     private static func changes(_ outcomes: [(AppRule, EnforceOutcome)]) -> String {
-        let launching = outcomes.filter { $0.1 == .launched }.map { $0.0.displayName }
+        let launching = outcomes.filter { $0.1 == .launched || $0.1.isWaiting }.map { $0.0.displayName }
         let quitting = outcomes.filter { $0.1 == .quit }.map { $0.0.displayName }
         var parts: [String] = []
         if !launching.isEmpty { parts.append("launching \(ListFormatter.localizedString(byJoining: launching))") }
@@ -406,10 +412,12 @@ final class AppState: ObservableObject {
 
     /// Launches a crashed app again, unless things changed while we waited.
     private func relaunch(_ targetKey: String) {
-        guard !isPoweringOff, let rule = keptRunningRule(for: targetKey), rule.relaunchesOnCrash == true,
-              enforce(rule) == .launched
-        else { return }
-        log.record("Relaunched \(rule.displayName) after it crashed.")
+        guard !isPoweringOff, let rule = keptRunningRule(for: targetKey), rule.relaunchesOnCrash == true else { return }
+        switch enforce(rule) {
+        case .launched: log.record("Relaunched \(rule.displayName) after it crashed.")
+        case .waiting(let other): log.record("Relaunching \(rule.displayName) after it crashed, once \(other) is running.")
+        default: break
+        }
     }
 
     // MARK: - Command line
@@ -537,6 +545,7 @@ final class AppState: ObservableObject {
         syncLocationMonitoring()
         if activeProfile?.id == profile.id {
             activeProfile = nil
+            sequencer.cancelAll()
             reevaluate()
         }
     }

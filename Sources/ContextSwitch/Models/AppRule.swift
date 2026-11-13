@@ -26,6 +26,12 @@ struct AppRule: Codable, Hashable, Identifiable {
     /// Launch it again if it crashes while its profile keeps it running —
     /// but not if it's quit, even with Force Quit (see `ProcessExit.isCrash`).
     var relaunchesOnCrash: Bool?
+    /// Don't launch it until the rule with this ID, in the same profile, is
+    /// running (see `LaunchOrder`): a proxy that needs Tailscale up first.
+    var launchesAfter: UUID?
+    /// Seconds to wait once that's running, for what it needs time to do —
+    /// Tailscale to connect. Not waited if it was running already.
+    var launchDelay: Int?
 
     /// Session-only manual override set from the menu bar popover. Not
     /// persisted — it resets whenever the profile re-activates.

@@ -10,6 +10,24 @@ enum EnforceOutcome: Equatable {
     case alreadyRunning
     case notRunning
     case ignored
+    /// Held back until the app it launches after (named) is running.
+    case waiting(for: String)
+    /// Not launched, as the app it launches after (named) won't be running.
+    case blocked(by: String)
+
+    var isWaiting: Bool {
+        if case .waiting = self { return true }
+        return false
+    }
+
+    /// Whether `LaunchSequencer.Finished` follows, for a launch that's
+    /// under way, held back, or given up on — unless the wait is cancelled.
+    var completesLater: Bool {
+        switch self {
+        case .launched, .waiting, .blocked: return true
+        default: return false
+        }
+    }
 }
 
 /// Why a launch didn't go through, for the activity log and notifications.
